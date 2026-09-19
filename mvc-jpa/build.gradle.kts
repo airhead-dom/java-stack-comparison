@@ -1,5 +1,5 @@
-// Control arm: isolates the cost of Hibernate with the thread model held
-// constant against arm A. Not part of the main rate sweep.
+// Control variant: isolates the cost of Hibernate with the thread model held
+// constant against mvc-platform. Not part of the main rate sweep.
 plugins {
     id("benchmark-app")
 }

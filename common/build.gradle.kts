@@ -1,5 +1,5 @@
 // Deliberately NOT a Boot application and deliberately dependency-free.
-// Holds only the domain records and the schema, so every arm queries identical
+// Holds only the domain records and the schema, so every variant queries identical
 // data. Anything web- or persistence-related here would couple the layer under
 // test and invalidate the comparison.
 plugins {

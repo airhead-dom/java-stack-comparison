@@ -20,13 +20,13 @@ java {
 }
 
 dependencies {
-    // Every arm is instrumented identically, or the numbers are not comparable.
+    // Every variant is instrumented identically, or the numbers are not comparable.
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-// Held constant across arms: heap, GC, and JFR. Any drift here invalidates a run.
+// Held constant across variants: heap, GC, and JFR. Any drift here invalidates a run.
 val benchmarkJvmArgs = listOf(
     "-Xms1g",
     "-Xmx1g",
