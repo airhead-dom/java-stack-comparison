@@ -1,0 +1,15 @@
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v4.1.1)
+
+2026-09-19T17:52:32.467+07:00  INFO 18004 --- [stub-service] [           main] c.e.benchmark.StubServiceApplication     : Starting StubServiceApplication v0.0.1-SNAPSHOT using Java 25.0.4 with PID 18004 (C:\Users\flyin\Documents\projects\java-comparison\stub-service\build\libs\stub-service-0.0.1-SNAPSHOT.jar started by flyin in C:\Users\flyin\Documents\projects\java-comparison)
+2026-09-19T17:52:32.471+07:00  INFO 18004 --- [stub-service] [           main] c.e.benchmark.StubServiceApplication     : No active profile set, falling back to 1 default profile: "default"
+2026-09-19T17:52:34.213+07:00  INFO 18004 --- [stub-service] [           main] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 1 endpoint beneath base path '/actuator'
+2026-09-19T17:52:34.860+07:00  INFO 18004 --- [stub-service] [           main] o.s.boot.reactor.netty.NettyWebServer    : Netty started on port 9099 (http)
+2026-09-19T17:52:34.880+07:00  INFO 18004 --- [stub-service] [           main] c.e.benchmark.StubServiceApplication     : Started StubServiceApplication in 3.01 seconds (process running for 3.663)
