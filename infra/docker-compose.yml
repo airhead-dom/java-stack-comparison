@@ -1,8 +1,11 @@
-# Local development only. Real measurement runs happen on the three EC2
-# instances in infra/terraform -- never quote numbers produced by this file.
 services:
   postgres:
     image: postgres:17
+    # The seeded dataset is ~870MB. The 128MB default shared_buffers would make
+    # this benchmark a disk-I/O measurement, so give Postgres room to hold it.
+    command: >
+      postgres -c shared_buffers=1GB -c effective_cache_size=3GB
+               -c max_connections=300
     environment:
       POSTGRES_DB: bench
       POSTGRES_USER: bench
