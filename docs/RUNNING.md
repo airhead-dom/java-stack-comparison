@@ -257,9 +257,12 @@ values as environment variables:
 export KEY=~/.ssh/bench.pem
 export SUT_HOST=ubuntu@<sut-public-ip>
 export LOADGEN_HOST=ubuntu@<loadgen-public-ip>
+export BACKEND_HOST=ubuntu@<backend-public-ip>
 export SUT_PRIVATE_IP=10.0.0.11
 export BACKEND_PRIVATE_IP=10.0.0.12
 ```
+
+`BACKEND_HOST` is needed so the script can start the stub if it is not running.
 
 Public addresses for ssh, private addresses for the instances talking to each
 other.
@@ -314,7 +317,34 @@ are listed separately rather than silently dropped.
 
 ## Preflight
 
-The script refuses to start unless the jars are on the SUT, k6 and the scenarios
-are on the load generator, and **the stub answers from the SUT**. That last check
-exists because a silent stub turns every `/api` cell into a measurement of
-connection failures rather than of the application.
+```bash
+scripts/run-benchmark.sh check     # run the checks, then stop
+```
+
+Every link in the chain is checked on its own line: ssh to each box, the Java
+version, each variant jar, port 8080 free, Postgres reachable **from the SUT**
+and seeded to the expected row count, the stub answering, k6 present, all five
+scenarios plus `lib/common.js`, and the load generator's path to the SUT.
+
+Postgres is checked from the SUT rather than from your laptop, because that is
+the path the application uses and it is governed by a different security group
+rule.
+
+The stub is verified by measuring it, not by trusting `/actuator/health`: the
+script calls `?delayMs=200` and confirms the response takes about 200ms. A stub
+that answers health while ignoring the delay would turn every `/api` cell into a
+measurement of something other than a 200ms upstream call.
+
+## The stub is started automatically
+
+If the stub is not running, the script starts it on `BACKEND_HOST` and waits for
+it, rather than failing. This happens in preflight and again before every `/api`
+cell, so a stub that crashes mid-matrix costs a few seconds instead of silently
+turning every remaining `/api` cell into a measurement of connection refusals.
+
+It gives up only if `BACKEND_HOST` is unreachable or `$STUB_JAR` is missing from
+`$BACKEND_DIR`, and prints the stub's own log when a start attempt fails.
+
+Postgres is *not* started automatically — it is a container with a seeded volume,
+and restarting it blindly could hide a real problem. A failed Postgres check
+names what is wrong and stops.

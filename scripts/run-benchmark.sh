@@ -23,11 +23,14 @@ SUT_HOST="${SUT_HOST:-ubuntu@app-sandbox}"               # public address, for s
 LOADGEN_HOST="${LOADGEN_HOST:-ubuntu@client-sandbox}"
 SUT_PRIVATE_IP="${SUT_PRIVATE_IP:-172.31.15.61}"         # what k6 connects to
 BACKEND_PRIVATE_IP="${BACKEND_PRIVATE_IP:-172.31.3.118}" # postgres + stub
+BACKEND_HOST="${BACKEND_HOST:-ubuntu@db-sandbox}"        # public address, to start the stub
 
 # Where things live on the remote boxes. The \$HOME is escaped so it expands
 # there, not here.
 SUT_DIR="${SUT_DIR:-\$HOME}"                     # the variant jars
 LOADGEN_DIR="${LOADGEN_DIR:-\$HOME/scenarios}"   # the k6 .js files
+BACKEND_DIR="${BACKEND_DIR:-\$HOME}"             # the stub jar
+STUB_JAR="${STUB_JAR:-stub-service-0.0.1-SNAPSHOT.jar}"
 
 DB_NAME="${DB_NAME:-bench}"
 DB_USER="${DB_USER:-bench}"
@@ -76,6 +79,54 @@ db_url_for() {
     else
         echo "jdbc:postgresql://$BACKEND_PRIVATE_IP:5432/$DB_NAME"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# STUB LIFECYCLE
+#
+# The stub is the one dependency that can vanish mid-matrix and leave every
+# later /api cell quietly measuring connection refusals rather than the
+# application. So rather than only reporting it as down, start it.
+# ---------------------------------------------------------------------------
+
+# Checked from the SUT, not from here: that is the path the application uses,
+# and it is governed by a different security group rule than your laptop's.
+stub_alive() {
+    $SSH "$SUT_HOST" "curl -sf --max-time 5 http://$BACKEND_PRIVATE_IP:9099/actuator/health >/dev/null" 2>/dev/null
+}
+
+# Returns 0 if the stub is up, starting it first if needed. Prefixes its output
+# so it reads correctly whether called from preflight or from inside a cell.
+ensure_stub() {
+    local indent="${1:-  }"
+    stub_alive && return 0
+
+    echo "${indent}stub is down - starting it on $BACKEND_HOST"
+
+    if ! $SSH "$BACKEND_HOST" 'true' 2>/dev/null; then
+        echo "${indent}cannot reach $BACKEND_HOST over ssh to start it"
+        return 1
+    fi
+    if ! $SSH "$BACKEND_HOST" "test -f $BACKEND_DIR/$STUB_JAR" 2>/dev/null; then
+        echo "${indent}$STUB_JAR not found in $BACKEND_DIR on $BACKEND_HOST"
+        return 1
+    fi
+
+    $SSH "$BACKEND_HOST" "cd $BACKEND_DIR && nohup java -jar $STUB_JAR > stub.log 2>&1 &" >/dev/null 2>&1
+
+    local waited=0
+    for _ in $(seq 1 30); do
+        sleep 2
+        waited=$((waited + 2))
+        if stub_alive; then
+            echo "${indent}stub up after ${waited}s"
+            return 0
+        fi
+    done
+
+    echo "${indent}stub failed to start - last log lines:"
+    $SSH "$BACKEND_HOST" "tail -15 $BACKEND_DIR/stub.log" 2>/dev/null | sed "s/^/${indent}  /"
+    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -147,11 +198,13 @@ preflight() {
         warn "postgres seeded" "psql not on the SUT, cannot verify row counts"
     fi
 
-    # --- STUB, the backend API ---
-    if $SSH "$SUT_HOST" "curl -sf --max-time 5 http://$BACKEND_PRIVATE_IP:9099/actuator/health >/dev/null"; then
+    # --- STUB, the backend API - started here if it is not already up ---
+    if stub_alive; then
         ok "stub health from SUT" "$BACKEND_PRIVATE_IP:9099"
+    elif ensure_stub "    "; then
+        ok "stub health from SUT" "$BACKEND_PRIVATE_IP:9099 (started by this script)"
     else
-        bad "stub health from SUT" "$BACKEND_PRIVATE_IP:9099 not answering"
+        bad "stub health from SUT" "$BACKEND_PRIVATE_IP:9099 down and could not be started"
     fi
 
     # Health alone is not enough. The endpoint must return the expected body AND
@@ -218,10 +271,12 @@ run_cell() {
     echo "--- $tag"
 
     # Re-check the dependency this workload actually needs. Either can die
-    # mid-matrix and leave every later cell silently measuring failures.
+    # mid-matrix and leave every later cell silently measuring failures. The
+    # stub is restarted rather than skipped, so one crash costs a few seconds
+    # instead of every remaining /api cell.
     if [ "$workload" = "api" ]; then
-        $SSH "$SUT_HOST" "curl -sf --max-time 5 http://$BACKEND_PRIVATE_IP:9099/actuator/health >/dev/null" \
-            || { echo "    SKIPPED: stub not answering"; return 1; }
+        ensure_stub "    " \
+            || { echo "    SKIPPED: stub down and could not be restarted"; return 1; }
     else
         $SSH "$SUT_HOST" "timeout 5 bash -c '</dev/tcp/$BACKEND_PRIVATE_IP/5432' 2>/dev/null" \
             || { echo "    SKIPPED: postgres not answering"; return 1; }
@@ -245,7 +300,7 @@ run_cell() {
     done
     if [ "$up" -eq 0 ]; then
         echo "    FAILED to start - last log lines:"
-        $SSH "$SUT_HOST" "tail -15 $SUT_DIR/app.log" | sed 's/^/      /'
+ $SSH "$SUT_HOST" "tail -15 $SUT_DIR/app.log" | sed 's/^/ /'
         stop_variant
         return 1
     fi
