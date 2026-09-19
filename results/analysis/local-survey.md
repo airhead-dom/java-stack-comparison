@@ -8,11 +8,29 @@ numbers that go in a decision memo.
 Fixed for every run: `-Xms1g -Xmx1g -XX:+UseG1GC`, `POOL_SIZE=20`,
 `UPSTREAM_DELAY_MS=200`, k6 v2.2.0, JDK 25.0.4, Spring Boot 4.1.1.
 
+## Reading the tables
+
+All latency figures are **milliseconds**, and are percentiles of k6's
+`http_req_duration` -- the time from a request being sent to its response being
+fully received, measured client-side. `p99 ms = 278.5` means 99% of requests
+completed in under 278.5ms and 1 in 100 took longer. The 500ms SLA is stated at
+p99, so that is the column that decides pass or fail.
+
+**Where errors are high, the latency columns are floored by the timeout.**
+`TIMEOUT_MS` is 1000, so k6 abandoned any request still outstanding at one
+second and recorded it as ~1000ms. A row reading `err 100.00 / p50 999.8` means
+every request exceeded one second -- not that they took exactly one second. The
+true latency is unknown and higher. Read error rate first; once it is non-zero
+the percentiles stop describing how bad things actually are.
+
+On `/api`, p50 decomposes cleanly: the stub sleeps 200ms, so `p50 ms = 208.9`
+means the application added ~9ms of its own.
+
 ## Latency and errors
 
 ### `/nodb` @ 2,000 rps — web layer only
 
-| variant | done/s | err% | p50 | p95 | p99 | max |
+| variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | mvc-platform | 2000 | 0.00 | 0.0 | 0.5 | 1.6 | 32.5 |
 | mvc-virtual | 2000 | 0.00 | 0.0 | 6.5 | **59.9** | **321.8** |
@@ -21,7 +39,7 @@ Fixed for every run: `-Xms1g -Xmx1g -XX:+UseG1GC`, `POOL_SIZE=20`,
 
 ### `/db` @ 1,000 rps — cheap query, pool far from binding
 
-| variant | done/s | err% | p50 | p95 | p99 | max |
+| variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | mvc-platform | 1000 | 0.00 | 1.1 | 15.5 | 89.9 | 214.9 |
 | mvc-virtual | 970 | 1.37 | 1.0 | 36.8 | **422.4** | 805.5 |
@@ -30,7 +48,7 @@ Fixed for every run: `-Xms1g -Xmx1g -XX:+UseG1GC`, `POOL_SIZE=20`,
 
 ### `/db-heavy` @ 1,000 rps — 15ms hold, pool at ~72% utilisation
 
-| variant | done/s | err% | p50 | p95 | p99 | max | |
+| variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms | |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | mvc-platform | 969 | 27.35 | 13.9 | 999.4 | 1891.1 | 2461.4 | **INVALID** (443 drops) |
 | mvc-virtual | 964 | 23.81 | 406.6 | 1111.5 | 1375.5 | 1559.7 | |
@@ -39,7 +57,7 @@ Fixed for every run: `-Xms1g -Xmx1g -XX:+UseG1GC`, `POOL_SIZE=20`,
 
 ### `/api` @ 500 rps — ~105 in flight, under Tomcat's 200 threads
 
-| variant | done/s | err% | p50 | p95 | p99 | max |
+| variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | mvc-platform | 497 | 0.00 | 209.0 | 216.5 | 219.3 | 239.1 |
 | mvc-virtual | 497 | 0.00 | 209.2 | 217.0 | 227.2 | 266.1 |
@@ -48,7 +66,7 @@ Fixed for every run: `-Xms1g -Xmx1g -XX:+UseG1GC`, `POOL_SIZE=20`,
 
 ### `/api` @ 1,500 rps — ~300 in flight, past Tomcat's 200 threads
 
-| variant | done/s | err% | p50 | p95 | p99 | max | |
+| variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms | |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | mvc-platform | 1421 | **100.00** | 999.8 | 1008.0 | 1039.7 | 1250.6 | |
 | mvc-virtual | 1453 | **0.00** | 208.9 | 229.7 | 278.5 | 419.1 | |
@@ -59,7 +77,7 @@ Fixed for every run: `-Xms1g -Xmx1g -XX:+UseG1GC`, `POOL_SIZE=20`,
 
 ### `/db-heavy` @ 1,000
 
-| variant | live threads | heap MB | GC ms | GCs |
+| variant | live threads | heap MB | GC total ms | GC count |
 | --- | ---: | ---: | ---: | ---: |
 | mvc-platform | 217 | 61 | 63 | 3 |
 | mvc-virtual | 27 | 46 | 92 | 4 |
@@ -68,7 +86,7 @@ Fixed for every run: `-Xms1g -Xmx1g -XX:+UseG1GC`, `POOL_SIZE=20`,
 
 ### `/api` @ 1,500
 
-| variant | live threads | heap MB | GC ms | GCs |
+| variant | live threads | heap MB | GC total ms | GC count |
 | --- | ---: | ---: | ---: | ---: |
 | mvc-platform | 329 | 319 | 172 | 5 |
 | mvc-virtual | 173 | **465** | 198 | 5 |
