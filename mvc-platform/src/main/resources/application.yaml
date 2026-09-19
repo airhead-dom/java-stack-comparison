@@ -12,6 +12,13 @@ spring:
       minimum-idle: ${POOL_SIZE:20}
       connection-timeout: 10000
 
+benchmark:
+  upstream:
+    base-url: ${UPSTREAM_URL:http://localhost:9099}
+    # 200ms puts ~200 requests in flight at the 1,000 TPS target, which is
+    # exactly Tomcat's default thread count. The rate ladder walks across it.
+    delay-ms: ${UPSTREAM_DELAY_MS:200}
+
 server:
   port: 8080
 
