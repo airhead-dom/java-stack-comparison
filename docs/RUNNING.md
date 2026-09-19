@@ -267,35 +267,62 @@ export BACKEND_PRIVATE_IP=10.0.0.12
 Public addresses for ssh, private addresses for the instances talking to each
 other.
 
-## Run from the load generator (faster)
+## Run from the load generator
 
-Driving the run from your laptop means every ssh command crosses the internet.
-A cell issues around a dozen of them, so the round trip dominates. Running from
-inside the VPC removes that: every hop is same-AZ and k6 runs locally.
+One standalone script per workload. No ssh, no orchestration: they talk to the
+SUT over HTTP and run k6 locally. You start and stop the variants yourself.
+
+**Once**, copy the scenarios and the runners up:
 
 ```bash
-scp -i key.pem scripts/run-on-loadgen.sh ubuntu@<loadgen-public>:~/
-scp -i key.pem key.pem ubuntu@<loadgen-public>:~/.ssh/      # or use ssh -A
-
-ssh -i key.pem ubuntu@<loadgen-public>
-./run-on-loadgen.sh check
-./run-on-loadgen.sh api
+scp -i key.pem -r load/scenarios load/lib ubuntu@<loadgen-public>:~/
 ```
 
-Results stay on that box in `~/results`. Fetch them when it finishes — note the
-path is written relative to the remote home directory, because `scp` speaks SFTP
-in OpenSSH 9+ and does not expand `~` or `$HOME`:
+**On the app server**, start one variant:
+
+```bash
+cd ~
+DB_URL=jdbc:postgresql://<backend-private>:5432/bench DB_USER=bench DB_PASSWORD=bench UPSTREAM_URL=http://<backend-private>:9099 POOL_SIZE=20 nohup java -Xms1g -Xmx1g -XX:+UseG1GC -jar mvc-platform-0.0.1-SNAPSHOT.jar > app.log 2>&1 &
+```
+
+`webflux-r2dbc` needs `r2dbc:postgresql://...` instead of `jdbc:`.
+
+**On the load generator**, run the workload:
+
+```bash
+cd ~/scenarios
+./run-api.sh              # the whole ladder: 250 500 1000 1500 2000
+./run-api.sh 1500         # one rate
+REPS=1 ./run-api.sh 1500  # one rate, one repetition
+```
+
+| script | rates | what it exercises |
+| --- | --- | --- |
+| `run-nodb.sh` | 1000 2000 4000 8000 | web layer only |
+| `run-db.sh` | 400 800 1000 1200 1600 2400 | cheap query, ~1ms hold |
+| `run-db-heavy.sh` | 400 800 1000 1200 1600 2400 | 15ms hold, pool binds ~1,387 |
+| `run-db-slow.sh` | 50 100 150 200 300 400 | 100ms hold, pool binds ~200 |
+| `run-api.sh` | 250 500 1000 1500 2000 | 200ms upstream, threads bind ~1,000 |
+
+Set `SUT=` if the app server's private IP differs from the default in the
+script. `OUTDIR=`, `REPS=`, `DURATION=` and `WARMUP=` all override too.
+
+**Results are named after the variant the SUT reports**, not after what you
+think you started. Each script reads the `variant` tag from
+`/actuator/prometheus`, so starting the wrong jar cannot silently mislabel a
+result — and if nothing is running it says so and stops.
+
+Then stop that variant, start the next, and run the same script again.
+
+Fetch everything when you are done:
 
 ```bash
 scp -i key.pem 'ubuntu@<loadgen-public>:results/*' results/raw/
 python scripts/summarize.py
 ```
 
-Edit the CONFIG block at the top of `run-on-loadgen.sh` with the two private
-IPs before copying it up, or pass them as `SUT_IP=` and `BACKEND_IP=`.
-
-Use `tmux` on the load generator for anything longer than a few cells, so a
-dropped SSH session does not take the run with it.
+Use `tmux` on the load generator for a full ladder, so a dropped SSH session
+does not take the run with it.
 
 ## Run from your laptop
 
