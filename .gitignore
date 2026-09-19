@@ -75,3 +75,6 @@ bin/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+### staged upload artefacts ###
+dist/
