@@ -4,30 +4,28 @@ All scripts are bash. On Windows run them from **Git Bash**, not PowerShell or c
 
 ## One-time setup
 
-**1. Fix `JAVA_HOME`.** It currently points at a path that does not exist, which
-makes `./gradlew` fail. In PowerShell, once:
-
-```powershell
-[Environment]::SetEnvironmentVariable("JAVA_HOME", "C:\Program Files\Java\jdk-25.0.4", "User")
-```
-
-Then close and reopen your terminal. Verify in Git Bash:
+**1. Check the toolchain.** In Git Bash:
 
 ```bash
 java -version          # expect 25.0.4
+k6 version             # expect v2.2.0
 ```
 
-**2. Make sure k6 is reachable.** It installs to `C:\Program Files\k6\k6.exe`.
-If `k6 version` does not work in Git Bash, either reopen the terminal (the
-installer adds it to PATH for new shells) or set it explicitly:
+`java` should already resolve correctly -- `JAVA_HOME` is set machine-wide to
+`C:\Program Files\Java\jdk-25.0.4`.
+
+If `k6` is not found, it is installed but not yet on this shell's PATH (the
+installer only updates PATH for shells opened afterwards). Either reopen the
+terminal, or point the scripts at it directly:
 
 ```bash
 export K6_BIN="/c/Program Files/k6/k6.exe"
 ```
 
-Every script honours `K6_BIN` and `JAVA_BIN` overrides.
+Every script honours `K6_BIN` and `JAVA_BIN` overrides, so a shell with an
+incomplete PATH is never a blocker.
 
-**3. Build the jars.**
+**2. Build the jars.**
 
 ```bash
 ./gradlew bootJar
@@ -146,7 +144,7 @@ three-instance EC2 setup, where the system under test has CPUs to itself.
 
 | Symptom | Cause |
 | --- | --- |
-| `java not found` | `JAVA_HOME` stale; see setup |
+| `java not found` | set `JAVA_BIN=/c/Program\ Files/Java/jdk-25.0.4/bin/java` |
 | `k6 not found` | reopen terminal, or `export K6_BIN=...` |
 | `stub-service not reachable` | run `scripts/env-up.sh` first |
 | `missing ...jar` | run `./gradlew bootJar` |
