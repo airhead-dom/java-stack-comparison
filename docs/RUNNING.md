@@ -1,152 +1,245 @@
 # Running the benchmark
 
-All scripts are bash. On Windows run them from **Git Bash**, not PowerShell or cmd.
+Plain commands, run by hand. Use **Git Bash** on Windows, not PowerShell.
 
-## One-time setup
+You will want **three terminals**: one for Postgres and ad-hoc commands, one for
+the stub service, one for the variant under test. The stub and the variant run
+in the foreground so you can see their logs and stop them with Ctrl+C.
 
-**1. Check the toolchain.** In Git Bash:
-
-```bash
-java -version          # expect 25.0.4
-k6 version             # expect v2.2.0
-```
-
-`java` should already resolve correctly -- `JAVA_HOME` is set machine-wide to
-`C:\Program Files\Java\jdk-25.0.4`.
-
-If `k6` is not found, it is installed but not yet on this shell's PATH (the
-installer only updates PATH for shells opened afterwards). Either reopen the
-terminal, or point the scripts at it directly:
+Check the toolchain once:
 
 ```bash
-export K6_BIN="/c/Program Files/k6/k6.exe"
+java -version     # expect 25.0.4
+k6 version        # expect v2.2.0
 ```
 
-Every script honours `K6_BIN` and `JAVA_BIN` overrides, so a shell with an
-incomplete PATH is never a blocker.
+If `k6` is not found, this shell predates the install. Open a new terminal, or
+use the full path `"/c/Program Files/k6/k6.exe"` wherever `k6` appears below.
 
-**2. Build the jars.**
+---
+
+## Step 1 — Build
 
 ```bash
 ./gradlew bootJar
 ```
 
-Re-run this after any code change. The run scripts execute jars, not `bootRun`.
+Produces a runnable jar per module under `<module>/build/libs/`. Re-run after
+any code change.
 
-## Each session
-
-```bash
-scripts/env-up.sh
-```
-
-Starts Postgres and waits for it to seed, then starts stub-service on port 9099.
-The **first** start seeds 100k customers, 200k accounts and 2.6M transactions
-and takes about 2.5 minutes; later starts reuse the volume and are immediate.
-
-At the end of a session:
+## Step 2 — Start Postgres
 
 ```bash
-scripts/env-down.sh           # stop, keep the seeded database
-scripts/env-down.sh --purge   # stop and delete it (next start re-seeds)
+docker compose -f infra/docker-compose.yml up -d postgres
 ```
 
-## Running one cell
+The first start seeds 100k customers, 200k accounts and 2.6M transactions, which
+takes about 2.5 minutes. Watch for it to finish:
 
 ```bash
-scripts/run-one.sh <variant> <workload> <rate> [repetition]
+docker exec infra-postgres-1 psql -U bench -d bench -tAc "select count(*) from transactions"
 ```
+
+Wait until this prints `2600000`. Anything less means seeding is still running.
+Later starts reuse the volume and are immediate.
+
+## Step 3 — Start the stub service
+
+**Second terminal.** This is the fake downstream that `/api` calls.
 
 ```bash
-scripts/run-one.sh mvc-platform api 1000
-scripts/run-one.sh webflux-r2dbc db-heavy 1200 2
+java -jar stub-service/build/libs/stub-service-0.0.1-SNAPSHOT.jar
 ```
 
-| Argument | Values |
+Leave it running. Check it from anywhere:
+
+```bash
+curl "http://localhost:9099/upstream?delayMs=200"
+```
+
+Only `/api` needs it; the database workloads do not.
+
+## Step 4 — Start the variant you want to measure
+
+**Third terminal.** One at a time — every variant binds port 8080 deliberately,
+so the load scripts never change between runs.
+
+```bash
+java -Xms1g -Xmx1g -XX:+UseG1GC -jar mvc-platform/build/libs/mvc-platform-0.0.1-SNAPSHOT.jar
+```
+
+Swap the module name for any of:
+
+```
+mvc-platform    mvc-virtual    webflux-r2dbc    mvc-jpa
+```
+
+The JVM flags matter: heap and collector must be **identical across variants**,
+or you are comparing GC configurations rather than thread models. Add
+`-XX:StartFlightRecording=settings=profile,dumponexit=true,filename=run.jfr` if
+you want a flight recording of that run.
+
+Wait for startup, then confirm:
+
+```bash
+curl http://localhost:8080/actuator/health
+```
+
+Optional overrides, set before `java`:
+
+```bash
+POOL_SIZE=50 java -jar ...             # connection pool size, default 20
+UPSTREAM_DELAY_MS=500 java -jar ...    # how slow the stub pretends to be
+```
+
+## Step 5 — Run the load
+
+Back in the first terminal:
+
+```bash
+mkdir -p results/raw
+
+BASE_URL=http://localhost:8080 \
+RATE=1000 \
+DURATION=60s \
+WARMUP=30s \
+OUT=results/raw/mvc-platform_api_1000.json \
+  k6 run load/scenarios/api.js
+```
+
+| Variable | Meaning |
 | --- | --- |
-| variant | `mvc-platform` `mvc-virtual` `webflux-r2dbc` `mvc-jpa` |
-| workload | `nodb` `db` `db-heavy` `db-slow` `api` |
-| rate | requests per second to **offer** |
-| repetition | run number, only used to name the output files |
+| `RATE` | requests per second to **offer** (not to complete) |
+| `DURATION` | measured phase |
+| `WARMUP` | discarded phase before it |
+| `OUT` | where the full JSON summary is written |
+| `TIMEOUT_MS` | per-request timeout, default 1000 |
 
-The script starts the variant's JVM, waits for health, runs a warmup that is
-discarded, measures, then shuts the JVM down. One variant at a time -- they all
-bind port 8080 deliberately, so the load scripts never change between runs.
+Scenarios in `load/scenarios/`:
 
-Useful overrides:
+```
+nodb.js       no database, no upstream — web layer only
+db.js         one cheap query (~1ms connection hold)
+db-heavy.js   statement query padded to 15ms hold — pool binds at ~1,387 rps
+db-slow.js    100ms hold — pool binds at ~200 rps
+api.js        200ms upstream call, no database — threads bind at ~1,000 rps
+```
+
+## Step 6 — Read the result
+
+```
+  offered rate      1000 rps
+  completed         30000 (967.7 rps)
+  dropped           3
+  error rate        15.36%
+  p50 / p95 / p99   948.1 / 1000.4 / 1001.0 ms
+  max               1023.2 ms
+```
+
+A threshold breach printed by k6 is **a result, not a failure**. Finding the rate
+at which the SLA breaks is the point of the exercise.
+
+`dropped` is the number to check. Drops during warmup are harmless. Drops during
+the measured phase mean k6 could not offer the target rate, so the run is not a
+valid open-model measurement — discard it, and either raise `TIMEOUT_MS` headroom
+or use a bigger load generator. To see which phase they fell in:
 
 ```bash
-DURATION=120s WARMUP=60s scripts/run-one.sh mvc-virtual api 1000
-UPSTREAM_DELAY_MS=500 scripts/run-one.sh mvc-platform api 1000   # slower upstream
-POOL_SIZE=50          scripts/run-one.sh mvc-platform db-heavy 1000
+python -c "import json; m = json.load(open('results/raw/mvc-platform_api_1000.json'))['metrics']; print(m.get('dropped_iterations{scenario:measure}', {}).get('values'))"
 ```
 
-Defaults are `DURATION=60s`, `WARMUP=30s`. Short durations are fine while
-exploring; use at least 60s for anything you intend to quote.
+## Step 7 — Capture the server-side metrics
 
-## Reading the output
+Before stopping the variant, while it is still running:
 
-```
-  offered rate      1000 rps      <- what k6 tried to send
-  completed         29520 (977.1 rps)
-  dropped           484           <- see below
-  error rate        12.85%
-  p50 / p95 / p99   210.3 / 464.3 / 1263.7 ms
-  max               1490.9 ms
+```bash
+curl -s http://localhost:8080/actuator/prometheus > results/raw/mvc-platform_api_1000.metrics.txt
 ```
 
-A threshold breach printed by k6 is **a result, not a failure** -- finding the
-rate at which the SLA breaks is the point of the ladder.
+The ones that matter:
 
-`dropped` counts iterations k6 could not start. Drops during warmup are
-harmless. Drops during the **measured** phase mean the generator failed to offer
-the target rate, so the cell is not a valid open-model measurement; the script
-writes a `.INVALID` marker file next to it and prints a warning. Never plot a
-cell that has one.
+```bash
+curl -s http://localhost:8080/actuator/prometheus | grep -E 'hikaricp_connections_(pending|active)|r2dbc_pool_(pending|acquired)|jvm_threads_live'
+```
 
-Every cell writes into `results/raw/`:
+A climbing `*_pending` means requests are queueing for a database connection.
 
-| File | Contents |
+## Step 8 — Next run
+
+Ctrl+C the variant's terminal, start the next variant, repeat from step 4. Leave
+Postgres and the stub running between variants.
+
+## Stopping
+
+Ctrl+C the stub and variant terminals, then:
+
+```bash
+docker compose -f infra/docker-compose.yml stop      # keep the seeded data
+docker compose -f infra/docker-compose.yml down -v   # delete it too
+```
+
+If a JVM was left behind and port 8080 is busy:
+
+```bash
+taskkill //F //IM java.exe //T
+```
+
+---
+
+## A worked comparison
+
+Three runs of the decisive workload, one variant at a time:
+
+```bash
+# terminal 2, once
+java -jar stub-service/build/libs/stub-service-0.0.1-SNAPSHOT.jar
+```
+
+```bash
+# terminal 3 — start, measure, Ctrl+C, next
+java -Xms1g -Xmx1g -XX:+UseG1GC -jar mvc-platform/build/libs/mvc-platform-0.0.1-SNAPSHOT.jar
+java -Xms1g -Xmx1g -XX:+UseG1GC -jar mvc-virtual/build/libs/mvc-virtual-0.0.1-SNAPSHOT.jar
+java -Xms1g -Xmx1g -XX:+UseG1GC -jar webflux-r2dbc/build/libs/webflux-r2dbc-0.0.1-SNAPSHOT.jar
+```
+
+```bash
+# terminal 1 — run after each one starts, changing OUT to match
+BASE_URL=http://localhost:8080 RATE=1500 DURATION=60s WARMUP=30s \
+  OUT=results/raw/mvc-platform_api_1500.json k6 run load/scenarios/api.js
+```
+
+## Rate ladders
+
+Derived in `docs/WORKLOADS.md` from the measured knees. Each rate is a separate
+k6 invocation.
+
+| Workload | Rates |
 | --- | --- |
-| `*.k6.json` | full k6 summary, the primary result |
-| `*.metrics.before.txt` / `*.after.txt` | Prometheus scrape bracketing the run; difference the counters |
-| `*.jfr` | flight recording -- GC, allocation, `jdk.VirtualThreadPinned` |
-| `*.app.log` | the variant's stdout |
-| `*.INVALID` | present only if the cell must be discarded |
+| `nodb` | 1000 2000 4000 8000 |
+| `db` | 400 800 1000 1200 1600 2400 |
+| `db-heavy` | 400 800 1000 1200 1600 2400 |
+| `db-slow` | 50 100 150 200 300 400 |
+| `api` | 250 500 1000 1500 2000 |
 
-`results/raw/` is gitignored.
+Three repetitions each, and vary the order between variants so that drift over a
+long session does not land on one variant. The full matrix by hand is several
+hundred runs — worth scripting once the EC2 setup exists and this manual flow has
+proven itself.
 
-## Running a ladder or the full matrix
+## Local results are not quotable
 
-```bash
-scripts/run-matrix.sh                                   # everything
-WORKLOADS="api" REPS=3 scripts/run-matrix.sh            # one workload
-VARIANTS_OVERRIDE="mvc-platform mvc-virtual" \
-  WORKLOADS="api db-heavy" REPS=3 scripts/run-matrix.sh
-```
-
-Cell order is randomised so that drift over a long run -- thermal, background
-load, a noisy neighbour -- cannot correlate with one variant. The rate ladders
-per workload live in `scripts/lib.sh` and are derived in `docs/WORKLOADS.md`.
-
-The full matrix is 4 variants x 5 workloads x ~5 rates x 3 repetitions, roughly
-350 cells at 90s each: about **9 hours**. Start with one workload.
-
-## A warning about local numbers
-
-On a laptop the load generator, the application, the stub and Postgres all share
-the same CPU, so they compete. Local results are useful for checking that the
-harness works and for seeing the *shape* of a difference. They are not quotable,
-and they are not stable -- the same cell can differ substantially between runs
-depending on what else the machine is doing. Quotable numbers need the
-three-instance EC2 setup, where the system under test has CPUs to itself.
+On one machine the load generator, the application, the stub and Postgres all
+compete for the same CPU. The same command can give noticeably different numbers
+depending on what else the machine is doing. Local runs are for checking the
+harness and seeing the *shape* of a difference. Quotable numbers need the
+three-instance EC2 split.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 | --- | --- |
-| `java not found` | set `JAVA_BIN=/c/Program\ Files/Java/jdk-25.0.4/bin/java` |
-| `k6 not found` | reopen terminal, or `export K6_BIN=...` |
-| `stub-service not reachable` | run `scripts/env-up.sh` first |
+| `k6: command not found` | shell predates the install; open a new terminal or use the full path |
 | `missing ...jar` | run `./gradlew bootJar` |
-| port 8080 in use | a previous JVM survived; `scripts/env-down.sh` |
-| every request 404s | database not seeded; `scripts/env-down.sh --purge` then `env-up.sh` |
+| port 8080 already in use | a previous JVM survived; `taskkill //F //IM java.exe //T` |
+| every request 404s | database not seeded; check the `count(*)` in step 2 |
+| `/api` fails, others fine | stub service not running; see step 3 |
