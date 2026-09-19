@@ -61,15 +61,31 @@ OUT_DIR="results/raw"
 # outside the region that is a few hundred ms per call, and a cell issues
 # enough of them for it to dominate the runtime.
 CTRL_DIR="${TMPDIR:-/tmp}/bench-ssh-$$"
-mkdir -p "$CTRL_DIR"
-MUX="-o ControlMaster=auto -o ControlPath=$CTRL_DIR/%r@%h:%p -o ControlPersist=10m"
+MUX=""
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        # Git Bash. Connection multiplexing needs a unix socket, and the
+        # default ControlPath contains a colon, which is not a legal character
+        # in a Windows filename. Run without it here; run-on-loadgen.sh gets
+        # the speed-up instead, where it works.
+        ;;
+    *)
+        mkdir -p "$CTRL_DIR"
+        # %C is a hash of the connection - no colons, and short enough to stay
+        # under the socket path length limit.
+        MUX="-o ControlMaster=auto -o ControlPath=$CTRL_DIR/%C -o ControlPersist=10m"
+        ;;
+esac
+
 SSH="ssh -i $KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 $MUX"
 SCP="scp -i $KEY -o StrictHostKeyChecking=no $MUX"
 
 cleanup() {
-    for h in "$SUT_HOST" "$LOADGEN_HOST" "$BACKEND_HOST"; do
-        ssh -i "$KEY" $MUX -O exit "$h" 2>/dev/null
-    done
+    if [ -n "$MUX" ]; then
+        for h in "$SUT_HOST" "$LOADGEN_HOST" "$BACKEND_HOST"; do
+            ssh -i "$KEY" $MUX -O exit "$h" 2>/dev/null
+        done
+    fi
     rm -rf "$CTRL_DIR"
 }
 trap cleanup EXIT
@@ -166,11 +182,21 @@ preflight() {
     fi
 
     # --- SUT reachable ---
-    local sut_uname
-    sut_uname=$($SSH "$SUT_HOST" 'uname -sm' 2>/dev/null)
-    if [ -n "$sut_uname" ]; then ok "ssh to SUT" "$sut_uname"; else
-        bad "ssh to SUT" "$SUT_HOST unreachable"; return
+    # stderr is kept, not discarded: "unreachable" on its own sends you looking
+    # at security groups when the real cause is usually a key, a host alias or
+    # an ssh option.
+    local sut_uname sut_err
+    sut_err=$(mktemp)
+    sut_uname=$($SSH "$SUT_HOST" 'uname -sm' 2>"$sut_err")
+    if [ -n "$sut_uname" ]; then
+        ok "ssh to SUT" "$sut_uname"
+    else
+        bad "ssh to SUT" "$SUT_HOST"
+        sed 's/^/        /' "$sut_err" | head -5
+        echo "        try by hand:  ssh -i $KEY $SUT_HOST uname -sm"
+        rm -f "$sut_err"; return
     fi
+    rm -f "$sut_err"
 
     # --- SUT toolchain and artefacts ---
     local jver
