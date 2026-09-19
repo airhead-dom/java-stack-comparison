@@ -1,11 +1,55 @@
-HELP.md
+### Gradle ###
 .gradle
 build/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
 
-### STS ###
+### Benchmark artefacts ###
+# Raw run output: one JSON, two metric scrapes, a JFR recording and a log per
+# cell, and the full matrix is several hundred cells. Analysis written from it
+# belongs in results/analysis/ and is committed.
+results/raw/*
+!results/raw/.gitkeep
+results/*.log
+# Flight recordings, including ones written to the repo root by the
+# -XX:StartFlightRecording example in docs/RUNNING.md
+*.jfr
+*.hprof
+hs_err_pid*.log
+replay_pid*.log
+
+### Terraform ###
+# State can contain instance addresses and any secret passed as a variable;
+# tfvars routinely holds credentials. Neither belongs in a shared repo.
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.lock.hcl
+
+### Local environment ###
+.env
+.env.*
+!.env.example
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+### Eclipse / STS ###
 .apt_generated
 .classpath
 .factorypath
@@ -17,15 +61,6 @@ bin/
 !**/src/main/**/bin/
 !**/src/test/**/bin/
 
-### IntelliJ IDEA ###
-.idea
-*.iws
-*.iml
-*.ipr
-out/
-!**/src/main/**/out/
-!**/src/test/**/out/
-
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/
@@ -36,7 +71,7 @@ out/
 ### VS Code ###
 .vscode/
 
-### benchmark artefacts ###
-results/raw/*
-results/*.log
-!results/raw/.gitkeep
+### OS ###
+.DS_Store
+Thumbs.db
+desktop.ini
