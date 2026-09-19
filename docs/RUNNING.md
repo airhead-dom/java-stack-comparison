@@ -240,3 +240,81 @@ three-instance EC2 split.
 | port 8080 already in use | a previous JVM survived; `taskkill //F //IM java.exe //T` |
 | every request 404s | database not seeded; check the `count(*)` in step 2 |
 | `/api` fails, others fine | stub service not running; see step 3 |
+
+---
+
+# Running on EC2 with the scripts
+
+The manual steps above still work and are the right way to debug a single cell.
+For the full matrix, two scripts drive it from your laptop.
+
+## Configure once
+
+Edit the CONFIG block at the top of `scripts/run-benchmark.sh`, or pass the
+values as environment variables:
+
+```bash
+export KEY=~/.ssh/bench.pem
+export SUT_HOST=ubuntu@<sut-public-ip>
+export LOADGEN_HOST=ubuntu@<loadgen-public-ip>
+export SUT_PRIVATE_IP=10.0.0.11
+export BACKEND_PRIVATE_IP=10.0.0.12
+```
+
+Public addresses for ssh, private addresses for the instances talking to each
+other.
+
+## Run
+
+```bash
+scripts/run-benchmark.sh api 500        # one workload, one rate
+scripts/run-benchmark.sh api            # one workload, its whole ladder
+scripts/run-benchmark.sh all            # everything, several hours
+```
+
+Useful overrides:
+
+```bash
+REPS=1 DURATION=30s WARMUP=30s scripts/run-benchmark.sh api 1500   # quick check
+VARIANTS="mvc-platform mvc-virtual" scripts/run-benchmark.sh api   # two variants
+JVM_FLAGS="-Xms128m -Xmx1g -XX:+UseG1GC" scripts/run-benchmark.sh api 500
+```
+
+That last one is for **resource measurement only**. A committed heap (`-Xms1g`)
+pins RSS near 1GB for every variant and hides the differences. Use the default
+fixed heap for latency work, and never mix the two in one comparison.
+
+## What it does per cell
+
+1. Starts the variant on the SUT with the right `DB_URL` scheme (R2DBC for
+   `webflux-r2dbc`, JDBC for the rest)
+2. Waits for `/actuator/health`
+3. Snapshots `/actuator/prometheus`
+4. Runs k6 on the load generator
+5. Snapshots `/actuator/prometheus` again, **before** stopping the JVM
+6. Stops the variant and copies the k6 JSON back
+
+Cell order is shuffled, so drift over a long run cannot correlate with one
+variant and masquerade as a result.
+
+A cell where k6 dropped iterations during the measured phase gets a `.INVALID`
+marker. Those did not sustain the offered rate and must not be plotted.
+
+## Read the results
+
+```bash
+python scripts/summarize.py             # all workloads
+python scripts/summarize.py api         # one
+python scripts/summarize.py > report.md
+```
+
+Prints medians across repetitions with the per-run p99 spread beside them, plus
+server-side heap, threads, pool pending and connection hold time. Invalid cells
+are listed separately rather than silently dropped.
+
+## Preflight
+
+The script refuses to start unless the jars are on the SUT, k6 and the scenarios
+are on the load generator, and **the stub answers from the SUT**. That last check
+exists because a silent stub turns every `/api` cell into a measurement of
+connection failures rather than of the application.
