@@ -38,4 +38,5 @@ out/
 
 ### benchmark artefacts ###
 results/raw/*
+results/*.log
 !results/raw/.gitkeep
