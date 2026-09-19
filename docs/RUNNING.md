@@ -267,7 +267,35 @@ export BACKEND_PRIVATE_IP=10.0.0.12
 Public addresses for ssh, private addresses for the instances talking to each
 other.
 
-## Run
+## Run from the load generator (faster)
+
+Driving the run from your laptop means every ssh command crosses the internet.
+A cell issues around a dozen of them, so the round trip dominates. Running from
+inside the VPC removes that: every hop is same-AZ and k6 runs locally.
+
+```bash
+scp -i key.pem scripts/run-on-loadgen.sh ubuntu@<loadgen-public>:~/
+scp -i key.pem key.pem ubuntu@<loadgen-public>:~/.ssh/      # or use ssh -A
+
+ssh -i key.pem ubuntu@<loadgen-public>
+./run-on-loadgen.sh check
+./run-on-loadgen.sh api
+```
+
+Results stay on that box in `~/results`. Fetch them when it finishes:
+
+```bash
+scp -i key.pem 'ubuntu@<loadgen-public>:~/results/*' results/raw/
+python scripts/summarize.py
+```
+
+Edit the CONFIG block at the top of `run-on-loadgen.sh` with the two private
+IPs before copying it up, or pass them as `SUT_IP=` and `BACKEND_IP=`.
+
+Use `tmux` on the load generator for anything longer than a few cells, so a
+dropped SSH session does not take the run with it.
+
+## Run from your laptop
 
 ```bash
 scripts/run-benchmark.sh api 500        # one workload, one rate

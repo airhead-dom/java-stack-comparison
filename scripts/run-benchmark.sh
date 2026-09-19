@@ -23,7 +23,7 @@ SUT_HOST="${SUT_HOST:-ubuntu@app-sandbox}"               # public address, for s
 LOADGEN_HOST="${LOADGEN_HOST:-ubuntu@client-sandbox}"
 SUT_PRIVATE_IP="${SUT_PRIVATE_IP:-172.31.15.61}"         # what k6 connects to
 BACKEND_PRIVATE_IP="${BACKEND_PRIVATE_IP:-172.31.3.118}" # postgres + stub
-BACKEND_HOST="${BACKEND_HOST:-ubuntu@db-sandbox}"        # public address, to start the stub
+BACKEND_HOST="${BACKEND_HOST:-ubuntu@backend-sandbox}"        # public address, to start the stub
 
 # Where things live on the remote boxes. The \$HOME is escaped so it expands
 # there, not here.
@@ -37,7 +37,7 @@ DB_USER="${DB_USER:-bench}"
 DB_PASSWORD="${DB_PASSWORD:-bench}"
 EXPECTED_ACCOUNTS="${EXPECTED_ACCOUNTS:-200000}"   # rows the seed should have left
 
-REPS="${REPS:-3}"                # repetitions per cell
+REPS="${REPS:-1}"                # repetitions per cell
 DURATION="${DURATION:-60s}"      # measured window
 WARMUP="${WARMUP:-60s}"          # discarded window; 60s minimum, see docs
 POOL_SIZE="${POOL_SIZE:-20}"
@@ -55,8 +55,24 @@ RATES_api="250 500 1000 1500 2000"
 # ---------------------------------------------------------------------------
 
 OUT_DIR="results/raw"
-SSH="ssh -i $KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10"
-SCP="scp -i $KEY -o StrictHostKeyChecking=no"
+
+# One multiplexed connection per host, reused by every later command. Without
+# this each ssh call pays a fresh TCP and crypto handshake; from a laptop
+# outside the region that is a few hundred ms per call, and a cell issues
+# enough of them for it to dominate the runtime.
+CTRL_DIR="${TMPDIR:-/tmp}/bench-ssh-$$"
+mkdir -p "$CTRL_DIR"
+MUX="-o ControlMaster=auto -o ControlPath=$CTRL_DIR/%r@%h:%p -o ControlPersist=10m"
+SSH="ssh -i $KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 $MUX"
+SCP="scp -i $KEY -o StrictHostKeyChecking=no $MUX"
+
+cleanup() {
+    for h in "$SUT_HOST" "$LOADGEN_HOST" "$BACKEND_HOST"; do
+        ssh -i "$KEY" $MUX -O exit "$h" 2>/dev/null
+    done
+    rm -rf "$CTRL_DIR"
+}
+trap cleanup EXIT
 FAILED=0
 
 usage() {
@@ -290,14 +306,13 @@ run_cell() {
         nohup java $JVM_FLAGS -jar $variant-0.0.1-SNAPSHOT.jar > app.log 2>&1 &" \
         >/dev/null 2>&1
 
-    # 2. wait for health
-    local up=0
-    for _ in $(seq 1 60); do
-        if $SSH "$SUT_HOST" 'curl -sf http://localhost:8080/actuator/health >/dev/null'; then
-            up=1; break
-        fi
-        sleep 2
-    done
+    # 2. wait for health - polled remotely, in one ssh session. Polling from
+    #    here opened a fresh connection per attempt, up to 60 per cell.
+    local up=1
+    $SSH "$SUT_HOST" 'for i in $(seq 1 90); do
+        curl -sf http://localhost:8080/actuator/health >/dev/null 2>&1 && exit 0
+        sleep 1
+    done; exit 1' || up=0
     if [ "$up" -eq 0 ]; then
         echo "    FAILED to start - last log lines:"
  $SSH "$SUT_HOST" "tail -15 $SUT_DIR/app.log" | sed 's/^/ /'
