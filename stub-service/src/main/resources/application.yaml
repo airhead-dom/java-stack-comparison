@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: stub-service
+
+server:
+  port: 9099
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

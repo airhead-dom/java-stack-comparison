@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: arm-b-mvc-virtual
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/bench}
+    username: ${DB_USER:bench}
+    password: ${DB_PASSWORD:bench}
+    hikari:
+      pool-name: bench-pool
+      # The experimental constant. Identical in every blocking arm.
+      maximum-pool-size: ${POOL_SIZE:10}
+      minimum-idle: ${POOL_SIZE:10}
+      connection-timeout: 10000
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    tags:
+      arm: arm-b-mvc-virtual

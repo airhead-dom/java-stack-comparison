@@ -1,0 +1,11 @@
+global:
+  # Fine-grained on purpose: benchmark runs are minutes long, and pool
+  # saturation transients are invisible at the default 15s.
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: sut
+    metrics_path: /actuator/prometheus
+    static_configs:
+      # host.docker.internal reaches an arm running on the host via bootRun.
+      - targets: ["host.docker.internal:8080"]

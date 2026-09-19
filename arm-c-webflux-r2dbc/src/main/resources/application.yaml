@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: arm-c-webflux-r2dbc
+  r2dbc:
+    url: ${DB_URL:r2dbc:postgresql://localhost:5432/bench}
+    username: ${DB_USER:bench}
+    password: ${DB_PASSWORD:bench}
+    pool:
+      enabled: true
+      # Matched to Hikari's maximum-pool-size in the blocking arms so that
+      # database concurrency is held constant and only the thread model varies.
+      initial-size: ${POOL_SIZE:10}
+      max-size: ${POOL_SIZE:10}
+      max-acquire-time: 10s
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    tags:
+      arm: arm-c-webflux-r2dbc
