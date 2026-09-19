@@ -1,31 +1,37 @@
 # Local survey — 2026-09-19
 
 **Not quotable.** Load generator, all four variants, Postgres and the stub shared
-one 6-core Windows laptop. Single 20s run per cell, 10s warmup, no repetitions.
-Useful for the *shape* of differences and for validating the harness; not for
-numbers that go in a decision memo.
+one 6-core Windows laptop. Useful for the *shape* of differences and for
+validating the harness; not for numbers that go in a decision memo.
 
 Fixed for every run: `-Xms1g -Xmx1g -XX:+UseG1GC`, `POOL_SIZE=20`,
 `UPSTREAM_DELAY_MS=200`, k6 v2.2.0, JDK 25.0.4, Spring Boot 4.1.1.
 
-> **Warmup was too short.** These cells used a 10s warmup, which does not reach
-> steady state. Marked figures (⚠) were re-measured with 20s and did not
-> reproduce. Treat every unmarked figure as provisional for the same reason.
+| Section | Protocol | Trust |
+| --- | --- | --- |
+| `/nodb`, `/db` | median of 3, 20s warmup / 25s measure | reasonable |
+| `/db-heavy`, `/api` | single run, 10s warmup / 20s measure | provisional |
+
+The first pass used a 10s warmup that never reached steady state and produced a
+figure that reversed on re-measurement (see [Retracted](#retracted)). `/nodb` and
+`/db` were redone properly. `/db-heavy` and `/api` were not, and should be read
+with that in mind — though the `/api` result has since been reproduced twice in
+independent runs.
 
 ## Reading the tables
 
 All latency figures are **milliseconds**, and are percentiles of k6's
-`http_req_duration` -- the time from a request being sent to its response being
+`http_req_duration` — the time from a request being sent to its response being
 fully received, measured client-side. `p99 ms = 278.5` means 99% of requests
 completed in under 278.5ms and 1 in 100 took longer. The 500ms SLA is stated at
 p99, so that is the column that decides pass or fail.
 
 **Where errors are high, the latency columns are floored by the timeout.**
-`TIMEOUT_MS` is 1000, so k6 abandoned any request still outstanding at one
-second and recorded it as ~1000ms. A row reading `err 100.00 / p50 999.8` means
-every request exceeded one second -- not that they took exactly one second. The
-true latency is unknown and higher. Read error rate first; once it is non-zero
-the percentiles stop describing how bad things actually are.
+`TIMEOUT_MS` is 1000, so k6 abandoned any request still outstanding at one second
+and recorded it as ~1000ms. A row reading `errors 100.00 / p50 999.8` means every
+request exceeded one second — not that they took exactly one second. The true
+latency is unknown and higher. Read error rate first; once it is non-zero the
+percentiles stop describing how bad things actually are.
 
 On `/api`, p50 decomposes cleanly: the stub sleeps 200ms, so `p50 ms = 208.9`
 means the application added ~9ms of its own.
@@ -34,32 +40,47 @@ means the application added ~9ms of its own.
 
 ### `/nodb` @ 2,000 rps — web layer only
 
-| variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| mvc-platform | 2000 | 0.00 | 0.0 | 0.5 | 1.6 | 32.5 |
-| mvc-virtual | 2000 | 0.00 | 0.0 | 6.5 | 59.9 ⚠ | 321.8 ⚠ |
-| webflux-r2dbc | 2000 | 0.00 | 0.0 | 0.5 | 2.6 | 53.9 |
-| mvc-jpa | 2000 | 0.00 | 0.0 | 0.5 | 1.2 | 38.6 |
+Median of three runs; individual p99s listed so the spread is visible.
+
+| variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms | p99 per run |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| mvc-platform | 2000 | 0.00 | 0.0 | 0.0 | 1.0 | 22.2 | 0.6 / 1.0 / 2.0 |
+| mvc-virtual | 2000 | 0.00 | 0.0 | 0.0 | 1.0 | 21.8 | 1.0 / 1.0 / 1.0 |
+| webflux-r2dbc | 2000 | 0.00 | 0.0 | 0.0 | 1.0 | 15.8 | 1.0 / 1.0 / 1.0 |
+| mvc-jpa | 2000 | 0.00 | 0.0 | 0.0 | 1.0 | 24.9 | 1.0 / 1.0 / 1.0 |
+
+**All four are identical.** Web-layer overhead is unmeasurable at this rate in
+every variant. No drops, no errors, full rate sustained.
 
 ### `/db` @ 1,000 rps — cheap query, pool far from binding
 
-⚠ = does not reproduce; see "What does not hold up" below.
+| variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms | p99 per run |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| webflux-r2dbc | 1000 | 0.00 | 1.0 | 1.6 | 3.5 | 25.5 | 2.5 / 3.5 / 4.4 |
+| mvc-platform | 1000 | 0.00 | 0.6 | 1.5 | 5.6 | 38.6 | 4.2 / 5.6 / 39.0 |
+| mvc-virtual | 1000 | 0.00 | 0.5 | 1.4 | 11.7 | 47.1 | 4.9 / 11.7 / 19.0 |
+| mvc-jpa | 1000 | 0.00 | 1.0 | 1.5 | 14.1 | 38.7 | 6.8 / 14.1 / 18.5 |
 
-| variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| mvc-platform | 1000 | 0.00 | 1.1 | 15.5 | 89.9 | 214.9 |
-| mvc-virtual | 970 | 1.37 | 1.0 | 36.8 | 422.4 ⚠ | 805.5 |
-| webflux-r2dbc | 1000 | 0.00 | 1.1 | 14.7 | 90.9 | 152.1 |
-| mvc-jpa | 1000 | 0.00 | 1.1 | 5.8 | 15.4 | 62.7 |
+**p50 and p95 are effectively identical** across all four — fractions of a
+millisecond apart on a 1ms query. The p99 ordering looks like a ranking, but the
+per-run spreads overlap heavily: mvc-platform's three runs span 4.2 to 39.0ms,
+wider than the gap between its median and anyone else's. With three repetitions
+on a shared machine, **the p99 column here does not support ranking the
+variants.**
+
+What it does support: at 1,000 rps with a 1ms query nothing is under stress, and
+every variant sustained the full rate with zero errors.
 
 ### `/db-heavy` @ 1,000 rps — 15ms hold, pool at ~72% utilisation
+
+Single run, 10s warmup. Provisional.
 
 | variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms | |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | mvc-platform | 969 | 27.35 | 13.9 | 999.4 | 1891.1 | 2461.4 | **INVALID** (443 drops) |
 | mvc-virtual | 964 | 23.81 | 406.6 | 1111.5 | 1375.5 | 1559.7 | |
-| webflux-r2dbc | 987 | **5.53** | 17.0 | 331.3 | 1041.5 | 1211.2 | |
-| mvc-jpa | 951 | **62.57** | 999.1 | 1002.8 | 1044.5 | 1133.3 | |
+| webflux-r2dbc | 987 | 5.53 | 17.0 | 331.3 | 1041.5 | 1211.2 | |
+| mvc-jpa | 951 | 62.57 | 999.1 | 1002.8 | 1044.5 | 1133.3 | |
 
 ### `/api` @ 500 rps — ~105 in flight, under Tomcat's 200 threads
 
@@ -103,75 +124,92 @@ means the application added ~9ms of its own.
 
 **The `/api` cliff is exactly where the arithmetic said it would be.** At 500 rps
 (~105 in flight) all four variants are indistinguishable — p50 209ms, zero
-errors, differences inside noise. At 1,500 rps (~300 in flight, past Tomcat's
-200 threads) `mvc-platform` and `mvc-jpa` fail *every single request*, while
-`mvc-virtual` and `webflux-r2dbc` are untouched at p50 209ms. This is a cliff,
-not a slope, and it lands where `docs/WORKLOADS.md` predicted before any code ran.
+errors. At 1,500 rps (~300 in flight, past Tomcat's 200 threads) `mvc-platform`
+and `mvc-jpa` fail *every single request*, while `mvc-virtual` and
+`webflux-r2dbc` are untouched at p50 209ms. A cliff, not a slope, landing where
+`docs/WORKLOADS.md` predicted before any code ran. Reproduced in two independent
+runs.
+
+**Below the ceiling, nothing distinguishes the variants.** `/nodb` at 2,000 rps
+and `/db` at 1,000 rps are flat across all four at p50 and p95 alike. The thread
+model is invisible until a resource is actually scarce — which is the other half
+of the rewrite answer.
 
 **Thread counts confirm the mechanism.** On `/api` at 1,500: webflux holds 32
-threads, mvc-virtual 173 platform threads (carriers, plus virtual threads that do
-not appear in this gauge), mvc-platform 329 and mvc-jpa 427 — both well past
-their useful ceiling and paying for it.
+threads, mvc-virtual 173 platform threads (carriers; virtual threads do not
+appear in this gauge), mvc-platform 329 and mvc-jpa 427 — both past their useful
+ceiling and paying for it.
 
 **Virtual thread stacks live on the heap, and it shows.** On `/api` at 1,500,
 mvc-virtual uses 465MB of heap against webflux's 19MB while serving the same load
-at similar latency. Same throughput, ~24x the heap. That is the cost of carrying
-a stack per in-flight request, and it is the concrete trade against reactive.
+at similar latency — roughly 24x, for carrying a stack per in-flight request.
+That is the concrete trade against reactive.
 
 **Hibernate's memory cost is visible.** On `/db-heavy`, mvc-jpa holds 289MB of
 heap against 43–61MB for every other variant on the same query — roughly 5x, for
 the persistence context and entity hydration. It was also the worst performer on
-that workload by a wide margin (62.57% errors).
+that workload (62.57% errors).
 
-## What does not hold up, and needs re-running on EC2
+## Retracted
 
-**mvc-virtual's poor short-task percentiles were an artefact. Retracted.**
+**mvc-virtual's poor short-task percentiles were an artefact.**
 
-The table above shows `mvc-virtual` at p99 422.4ms on `/db` against 15-91ms for
-everything else, which reads as virtual threads being the worst option. It does
-not reproduce. Re-run with a 20s warmup instead of 10s, three repetitions each:
+The first pass showed `mvc-virtual` at p99 422.4ms on `/db` and 59.9ms on
+`/nodb`, against single-digit milliseconds elsewhere — which read as virtual
+threads being the worst option available. Neither reproduces.
 
-| variant | rep 1 | rep 2 | rep 3 | median p99 |
-| --- | ---: | ---: | ---: | ---: |
-| mvc-platform | 4.0 | 27.2 | 9.2 | **9.2 ms** |
-| mvc-virtual | 9.8 | 5.4 | 6.4 | **6.4 ms** |
+Re-run with a 20s warmup instead of 10s, three repetitions:
 
-Zero errors on all six runs, full 1,000 rps sustained. `mvc-virtual` is not
-worse here -- its median p99 is slightly *better*, and the spread of both
-overlaps completely. The original figure was a 10s warmup that did not reach
-steady state, reported from a single unrepeated run.
+| workload | mvc-platform | mvc-virtual | first-pass claim |
+| --- | ---: | ---: | --- |
+| `/nodb` p99 | 1.0 ms | 1.0 ms | 59.9 ms |
+| `/db` p99 | 5.6 ms | 11.7 ms | 422.4 ms |
 
-Verified it was not pinning either. A flight recording over ~50,000 requests
-contains **one** `jdk.VirtualThreadPinned` event, lasting 33.9ms, on first-time
-class loading of a Hikari proxy inside `ClassLoader.loadClass` -- a startup
-artefact that cannot recur once the class is loaded. Zero
-`jdk.VirtualThreadSubmitFailed`, so the carrier pool was never exhausted.
+On `/nodb` the two are identical. On `/db` the medians differ by 6ms with
+overlapping spreads — not a ranking. The original figures were single unrepeated
+runs that never left warmup.
 
-The same warmup problem applies to the `/nodb` p99 of 59.9ms, which has not been
-re-measured and should be treated as unreliable rather than as a finding.
+**Not pinning either.** A flight recording over ~50,000 requests contains **one**
+`jdk.VirtualThreadPinned` event, 33.9ms, on first-time class loading of a Hikari
+proxy inside `ClassLoader.loadClass` — a startup artefact that cannot recur once
+the class is loaded. Zero `jdk.VirtualThreadSubmitFailed`, so the carrier pool
+was never exhausted.
 
-**Two cells are INVALID** — k6 dropped iterations during the measured phase, so
-the offered rate was not actually sustained and those rows understate the load.
-Both are on the laptop's capacity, not the application's.
+*Method note:* the first attempt at that check read `0 events` from 0-byte files.
+`dumponexit` needs a graceful shutdown and the JVMs were hard-killed, so nothing
+was written. Recordings must be taken with `jcmd <pid> JFR.dump` while the
+process is alive.
+
+## Still unreliable
 
 **`/db-heavy` degraded everywhere**, including variants that should have coped.
-At 1,000 rps against a 1,387 rps pool knee, nothing should have been in trouble.
-The whole machine was saturated. This workload needs the EC2 split before it says
-anything.
+At 1,000 rps against a 1,387 rps pool knee nothing should have been in trouble.
+The whole machine was saturated. Says nothing until the EC2 split.
 
-**Single runs, no repetitions.** Earlier in the same session, `mvc-virtual` on
-`/api` measured p99 205ms at 1,500 rps and p99 1,264ms at 1,000 rps — the *lower*
-rate looking worse. That is the noise floor of this machine, and it is larger
-than several of the differences tabulated above.
+**Two cells are INVALID** — k6 dropped iterations during the measured phase, so
+the offered rate was not sustained and those rows understate the load. Both are
+the laptop's capacity, not the application's.
+
+**`/db-heavy` is a single run** at the short warmup and has not been reproduced.
+`/api` is also a single run per rate, but its cliff has since appeared in two
+independent runs, so the shape is trustworthy even if the exact figures are not.
 
 ## Provisional reading
 
-On the one workload where the machine was not the bottleneck — `/api` — the
-result is clean and matches the theory: below the thread ceiling nothing
-distinguishes the variants; above it, platform threads fail completely and both
-alternatives are unaffected.
+On the workloads where the machine was not the bottleneck the picture is
+consistent: **below the thread ceiling nothing distinguishes the four variants,
+and above it platform threads fail completely while both alternatives are
+unaffected.**
 
-The interesting question for the rewrite is therefore not whether virtual threads
-work. It is whether the ~24x heap difference against reactive matters at the load
-the platform actually serves, given that one is a configuration flag and the
-other is a rewrite.
+So the question for the rewrite is not whether virtual threads work — on every
+clean workload they match reactive. It is whether the ~24x heap difference
+against reactive matters at the load the platform actually serves, given that
+`mvc-virtual` is a configuration flag and `webflux-r2dbc` is a rewrite.
+
+## For the EC2 runs
+
+- **60s warmup minimum.** 10s produced a figure that reversed on re-measurement;
+  20s was adequate here but is not much margin.
+- **Three repetitions, report the median, and show the spread.** Several
+  differences in the first pass were smaller than the noise between runs.
+- **Take JFR with `jcmd <pid> JFR.dump`**, not `dumponexit`.
