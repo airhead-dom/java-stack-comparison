@@ -40,7 +40,8 @@ what `/api` is for.
 | Endpoint | Work | Hold | Latency | In flight @1k TPS | Knee |
 | --- | --- | --- | --- | --- | --- |
 | `/nodb` | constant response | -- | ~1ms | ~1 | web layer |
-| `/db` | one account-summary query | 15ms | ~15ms | ~15 | 1,333 (pool) |
+| `/db` | one account-summary query | ~1.0ms | ~15ms | ~15 | not pool-bound |
+| `/db-heavy` | one statement query: aggregate + 20 rows | ~1.0ms | ~15ms | ~15 | not pool-bound |
 | `/db-slow` | one query, `pg_sleep(0.1)` | 100ms | ~100ms | ~100 | 200 (pool) |
 | `/api` | one 200ms downstream call | -- | ~200ms | **~200** | 1,000 (threads) |
 
@@ -65,12 +66,39 @@ model does not matter for plain database work at this load.
 
 Three repetitions per cell, order randomised, containers restarted between runs.
 
-## Calibration owed
+## Calibration: measured, and still short of 15ms
 
-The seeded account-summary query measures ~0.2ms locally, not 15ms. Phase 1 must
-measure real hold time via `hikaricp_connections_usage_seconds` and then either
-accept the measured value or pad `/db` to 15ms deliberately. Padding is fine if
-recorded here; benchmarking a 0.2ms query while claiming to model 15ms is not.
+Measured on the seeded database over 300 warm requests each, via
+`hikaricp_connections_usage_seconds`:
+
+| Endpoint | Mean connection hold |
+| --- | --- |
+| `/db` | 1.03ms |
+| `/db-heavy` | 1.02ms |
+
+`/db-heavy` does strictly more work -- an aggregate over the account's whole
+history, twenty rows returned and mapped, a much larger response body -- yet
+holds its connection for the same ~1ms. The extra cost is in the application,
+not at the database: twenty index-scanned rows are trivial for Postgres, while
+mapping and serialising them is not free for the JVM. That is worth knowing on
+its own, and it is why the heavy endpoint does not fix the sizing problem.
+
+At ~1ms of hold time the pool saturates around 20,000 TPS and never binds, so
+neither `/db` nor `/db-heavy` is pool-bound as configured. `/db-slow` remains
+the only pool-bound workload. Closing the gap to the stated 15ms production hold
+time requires a deliberate pad, which is not yet applied.
+
+Hibernate measurably costs more inside the connection window: `mvc-jpa` held
+connections 1.93ms on `/db-heavy` against 1.21ms for `mvc-platform` on the same
+query -- roughly 60% longer -- on a first, unrepeated sample.
+
+### Observability asymmetry
+
+R2DBC pool gauges are exported by Spring Boot as `r2dbc_pool_*_connections`, so
+`pending`, `idle` and `acquired` are comparable across variants. There is no
+R2DBC equivalent of Hikari's `connections_usage_seconds` timer, so mean hold
+time cannot be read directly from `webflux-r2dbc` and must be inferred from
+latency.
 
 ## Deliberately out of scope
 

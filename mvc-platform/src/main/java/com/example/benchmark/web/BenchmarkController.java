@@ -2,8 +2,12 @@ package com.example.benchmark.web;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.List;
 
+import com.example.benchmark.api.AccountStatement;
 import com.example.benchmark.api.AccountSummary;
+import com.example.benchmark.api.StatementAssembler;
+import com.example.benchmark.api.StatementRow;
 import com.example.benchmark.api.Pong;
 import com.example.benchmark.api.UpstreamResponse;
 import com.example.benchmark.sql.BenchmarkQueries;
@@ -61,6 +65,23 @@ public class BenchmarkController {
 	}
 
 	/**
+	 * Still one database operation, but a realistic one: an aggregate over the
+	 * account's whole history plus its twenty most recent transactions, and
+	 * twenty rows to map instead of one.
+	 */
+	@GetMapping("/db-heavy")
+	public AccountStatement dbHeavy(@RequestParam long accountId) {
+		List<StatementRow> rows = this.jdbcClient.sql(BenchmarkQueries.ACCOUNT_STATEMENT)
+				.param("accountId", accountId)
+				.query(BenchmarkController::mapStatementRow)
+				.list();
+		if (rows.isEmpty()) {
+			throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+		}
+		return StatementAssembler.assemble(rows);
+	}
+
+	/**
 	 * One downstream call and no database at all. Nothing here touches the
 	 * connection pool, so whatever separates the variants is the thread model.
 	 */
@@ -80,6 +101,38 @@ public class BenchmarkController {
 				.query(BenchmarkController::mapSummary)
 				.optional()
 				.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+	}
+
+	private static StatementRow mapStatementRow(ResultSet rs, int rowNum) throws SQLException {
+		java.sql.Timestamp postedAt = rs.getTimestamp("posted_at");
+		return new StatementRow(
+				rs.getLong("account_id"),
+				rs.getString("account_number"),
+				rs.getString("product_type"),
+				rs.getString("currency"),
+				rs.getBigDecimal("current_balance"),
+				rs.getBigDecimal("available_balance"),
+				rs.getString("status"),
+				rs.getString("branch_code"),
+				rs.getTimestamp("opened_at").toInstant(),
+				rs.getLong("customer_id"),
+				rs.getString("full_name"),
+				rs.getString("id_type"),
+				rs.getString("id_number"),
+				rs.getLong("total_transactions"),
+				rs.getBigDecimal("total_debit"),
+				rs.getBigDecimal("total_credit"),
+				rs.getObject("transaction_id", Long.class),
+				rs.getString("reference_number"),
+				rs.getString("direction"),
+				rs.getString("transaction_type"),
+				rs.getBigDecimal("amount"),
+				rs.getBigDecimal("running_balance"),
+				rs.getString("transaction_status"),
+				rs.getString("channel"),
+				rs.getString("counterparty_account"),
+				rs.getString("description"),
+				(postedAt != null) ? postedAt.toInstant() : null);
 	}
 
 	private static AccountSummary mapSummary(ResultSet rs, int rowNum) throws SQLException {

@@ -6,8 +6,12 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 
+import com.example.benchmark.api.AccountStatement;
 import com.example.benchmark.api.AccountSummary;
+import com.example.benchmark.api.StatementAssembler;
+import com.example.benchmark.api.StatementRow;
 import com.example.benchmark.api.Pong;
 import com.example.benchmark.api.UpstreamResponse;
 import com.example.benchmark.entity.AccountEntity;
@@ -110,6 +114,26 @@ public class BenchmarkController {
 				(String) row.get("id_number"));
 	}
 
+	/**
+	 * Native query rather than JPQL: the lateral joins and the aggregate filter
+	 * have no JPQL equivalent. Like /db-slow, this prices Hibernate as a query
+	 * executor, not as an ORM.
+	 */
+	@GetMapping("/db-heavy")
+	@SuppressWarnings("unchecked")
+	public AccountStatement dbHeavy(@RequestParam long accountId) {
+		List<Tuple> tuples = this.entityManager
+				.createNativeQuery(BenchmarkQueries.ACCOUNT_STATEMENT, Tuple.class)
+				.setParameter("accountId", accountId)
+				.getResultList();
+		if (tuples.isEmpty()) {
+			throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+		}
+		return StatementAssembler.assemble(tuples.stream()
+				.map(BenchmarkController::mapStatementRow)
+				.toList());
+	}
+
 	@GetMapping("/api")
 	public UpstreamResponse api() {
 		return this.upstreamClient.get()
@@ -118,6 +142,37 @@ public class BenchmarkController {
 						.build())
 				.retrieve()
 				.body(UpstreamResponse.class);
+	}
+
+	private static StatementRow mapStatementRow(Tuple row) {
+		return new StatementRow(
+				asLong(row.get("account_id")),
+				(String) row.get("account_number"),
+				(String) row.get("product_type"),
+				(String) row.get("currency"),
+				(BigDecimal) row.get("current_balance"),
+				(BigDecimal) row.get("available_balance"),
+				(String) row.get("status"),
+				(String) row.get("branch_code"),
+				asInstant(row.get("opened_at")),
+				asLong(row.get("customer_id")),
+				(String) row.get("full_name"),
+				(String) row.get("id_type"),
+				(String) row.get("id_number"),
+				asLong(row.get("total_transactions")),
+				(BigDecimal) row.get("total_debit"),
+				(BigDecimal) row.get("total_credit"),
+				asLong(row.get("transaction_id")),
+				(String) row.get("reference_number"),
+				(String) row.get("direction"),
+				(String) row.get("transaction_type"),
+				(BigDecimal) row.get("amount"),
+				(BigDecimal) row.get("running_balance"),
+				(String) row.get("transaction_status"),
+				(String) row.get("channel"),
+				(String) row.get("counterparty_account"),
+				(String) row.get("description"),
+				asInstant(row.get("posted_at")));
 	}
 
 	private static Long asLong(Object value) {

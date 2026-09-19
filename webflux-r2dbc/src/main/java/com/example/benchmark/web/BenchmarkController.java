@@ -2,7 +2,10 @@ package com.example.benchmark.web;
 
 import java.time.OffsetDateTime;
 
+import com.example.benchmark.api.AccountStatement;
 import com.example.benchmark.api.AccountSummary;
+import com.example.benchmark.api.StatementAssembler;
+import com.example.benchmark.api.StatementRow;
 import com.example.benchmark.api.Pong;
 import com.example.benchmark.api.UpstreamResponse;
 import com.example.benchmark.sql.BenchmarkQueries;
@@ -57,6 +60,18 @@ public class BenchmarkController {
 		return query(BenchmarkQueries.ACCOUNT_SUMMARY_SLOW, accountId);
 	}
 
+	@GetMapping("/db-heavy")
+	public Mono<AccountStatement> dbHeavy(@RequestParam long accountId) {
+		return this.databaseClient.sql(BenchmarkQueries.ACCOUNT_STATEMENT)
+				.bind("accountId", accountId)
+				.map(BenchmarkController::mapStatementRow)
+				.all()
+				.collectList()
+				.flatMap((rows) -> rows.isEmpty()
+						? Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND))
+						: Mono.just(StatementAssembler.assemble(rows)));
+	}
+
 	@GetMapping("/api")
 	public Mono<UpstreamResponse> api() {
 		return this.upstreamClient.get()
@@ -73,6 +88,39 @@ public class BenchmarkController {
 				.map(BenchmarkController::mapSummary)
 				.one()
 				.switchIfEmpty(Mono.error(() -> new ResponseStatusException(HttpStatus.NOT_FOUND)));
+	}
+
+	private static StatementRow mapStatementRow(Readable row) {
+		OffsetDateTime openedAt = row.get("opened_at", OffsetDateTime.class);
+		OffsetDateTime postedAt = row.get("posted_at", OffsetDateTime.class);
+		return new StatementRow(
+				row.get("account_id", Long.class),
+				row.get("account_number", String.class),
+				row.get("product_type", String.class),
+				row.get("currency", String.class),
+				row.get("current_balance", java.math.BigDecimal.class),
+				row.get("available_balance", java.math.BigDecimal.class),
+				row.get("status", String.class),
+				row.get("branch_code", String.class),
+				(openedAt != null) ? openedAt.toInstant() : null,
+				row.get("customer_id", Long.class),
+				row.get("full_name", String.class),
+				row.get("id_type", String.class),
+				row.get("id_number", String.class),
+				row.get("total_transactions", Long.class),
+				row.get("total_debit", java.math.BigDecimal.class),
+				row.get("total_credit", java.math.BigDecimal.class),
+				row.get("transaction_id", Long.class),
+				row.get("reference_number", String.class),
+				row.get("direction", String.class),
+				row.get("transaction_type", String.class),
+				row.get("amount", java.math.BigDecimal.class),
+				row.get("running_balance", java.math.BigDecimal.class),
+				row.get("transaction_status", String.class),
+				row.get("channel", String.class),
+				row.get("counterparty_account", String.class),
+				row.get("description", String.class),
+				(postedAt != null) ? postedAt.toInstant() : null);
 	}
 
 	private static AccountSummary mapSummary(Readable row) {
