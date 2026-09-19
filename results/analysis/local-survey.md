@@ -140,10 +140,13 @@ threads, mvc-virtual 173 platform threads (carriers; virtual threads do not
 appear in this gauge), mvc-platform 329 and mvc-jpa 427 — both past their useful
 ceiling and paying for it.
 
-**Virtual thread stacks live on the heap, and it shows.** On `/api` at 1,500,
-mvc-virtual uses 465MB of heap against webflux's 19MB while serving the same load
-at similar latency — roughly 24x, for carrying a stack per in-flight request.
-That is the concrete trade against reactive.
+**Virtual thread stacks live on the heap, and it shows** — but the 465MB vs 19MB
+figure in the table above is unreliable and has been superseded. It was a single
+sample taken once after the run, with `-Xms1g` committing the heap regardless of
+demand, at a rate where mvc-platform was failing. Measured properly in
+[resource-usage.md](resource-usage.md), the heap ratio is ~2x at 500 rps and
+~3.4x at 1,000 rps, and RSS differs by 15% and 66%. The mechanism holds; the
+magnitude was wrong by an order of magnitude.
 
 **Hibernate's memory cost is visible.** On `/db-heavy`, mvc-jpa holds 289MB of
 heap against 43–61MB for every other variant on the same query — roughly 5x, for
@@ -202,9 +205,10 @@ and above it platform threads fail completely while both alternatives are
 unaffected.**
 
 So the question for the rewrite is not whether virtual threads work — on every
-clean workload they match reactive. It is whether the ~24x heap difference
-against reactive matters at the load the platform actually serves, given that
-`mvc-virtual` is a configuration flag and `webflux-r2dbc` is a rewrite.
+clean workload they match reactive. It is whether reactive's flat memory profile
+matters at the load the platform actually serves — see
+[resource-usage.md](resource-usage.md) — given that `mvc-virtual` is a
+configuration flag and `webflux-r2dbc` is a rewrite.
 
 ## For the EC2 runs
 
