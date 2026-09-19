@@ -282,10 +282,12 @@ ssh -i key.pem ubuntu@<loadgen-public>
 ./run-on-loadgen.sh api
 ```
 
-Results stay on that box in `~/results`. Fetch them when it finishes:
+Results stay on that box in `~/results`. Fetch them when it finishes — note the
+path is written relative to the remote home directory, because `scp` speaks SFTP
+in OpenSSH 9+ and does not expand `~` or `$HOME`:
 
 ```bash
-scp -i key.pem 'ubuntu@<loadgen-public>:~/results/*' results/raw/
+scp -i key.pem 'ubuntu@<loadgen-public>:results/*' results/raw/
 python scripts/summarize.py
 ```
 

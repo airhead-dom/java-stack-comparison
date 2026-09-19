@@ -78,7 +78,6 @@ case "$(uname -s)" in
 esac
 
 SSH="ssh -i $KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 $MUX"
-SCP="scp -i $KEY -o StrictHostKeyChecking=no $MUX"
 
 cleanup() {
     if [ -n "$MUX" ]; then
@@ -380,8 +379,22 @@ run_cell() {
 
     # 7. stop, then collect
     stop_variant
-    $SCP "$LOADGEN_HOST:$LOADGEN_DIR/$tag.json" "$OUT_DIR/" >/dev/null 2>&1 \
-        || echo "    WARNING: could not fetch $tag.json"
+
+    # Fetched over ssh rather than scp. Since OpenSSH 9.0 scp speaks SFTP,
+    # which does no shell expansion, so a remote path containing $HOME is taken
+    # literally and never resolves. Piping cat through ssh uses the same shell
+    # that every other command here relies on.
+    if $SSH "$LOADGEN_HOST" "test -f $LOADGEN_DIR/$tag.json"; then
+        $SSH "$LOADGEN_HOST" "cat $LOADGEN_DIR/$tag.json" > "$OUT_DIR/$tag.json"
+        if [ ! -s "$OUT_DIR/$tag.json" ]; then
+            echo "    WARNING: $tag.json came back empty"
+            rm -f "$OUT_DIR/$tag.json"
+        fi
+    else
+        echo "    WARNING: $LOADGEN_DIR/$tag.json not found on the load generator"
+        echo "             k6 may have failed; check with:"
+        echo "             ssh $LOADGEN_HOST 'ls $LOADGEN_DIR/*.json'"
+    fi
 
     # 8. flag cells where k6 could not sustain the offered rate
     if [ -f "$OUT_DIR/$tag.json" ]; then

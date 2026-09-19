@@ -15,7 +15,7 @@
 # command, which is most of why it feels slow.
 #
 # Results land in ~/results on this box. Fetch them at the end with:
-#   scp -i key.pem 'ubuntu@<loadgen-public>:~/results/*' results/raw/
+#   scp -i key.pem 'ubuntu@<loadgen-public>:results/*' results/raw/
 
 set -uo pipefail
 
@@ -62,7 +62,7 @@ RATES_api="250 500 1000 1500 2000"
 CTRL_DIR="${TMPDIR:-/tmp}/bench-ssh-$$"
 mkdir -p "$CTRL_DIR"
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10 \
-          -o ControlMaster=auto -o ControlPath=$CTRL_DIR/%r@%h:%p -o ControlPersist=10m"
+          -o ControlMaster=auto -o ControlPath=$CTRL_DIR/%C -o ControlPersist=10m"
 [ -n "$KEY" ] && SSH_OPTS="-i $KEY $SSH_OPTS"
 
 SUT="$SSH_USER@$SUT_IP"
@@ -317,4 +317,6 @@ done
 echo
 echo "done in $(( ($(date +%s) - START) / 60 )) min"
 echo "results in $RESULT_DIR/"
-echo "fetch with:  scp -i key.pem '$SSH_USER@<loadgen-public>:$RESULT_DIR/*' results/raw/"
+# Relative to the remote home directory on purpose: scp speaks SFTP in
+# OpenSSH 9+, which does not expand ~ or $HOME.
+echo "fetch with:  scp -i key.pem '$SSH_USER@<loadgen-public>:results/*' results/raw/"
