@@ -9,8 +9,8 @@ spring:
       enabled: true
       # Matched to Hikari's maximum-pool-size in the blocking variants so that
       # database concurrency is held constant and only the thread model varies.
-      initial-size: ${POOL_SIZE:10}
-      max-size: ${POOL_SIZE:10}
+      initial-size: ${POOL_SIZE:20}
+      max-size: ${POOL_SIZE:20}
       max-acquire-time: 10s
 
 server:

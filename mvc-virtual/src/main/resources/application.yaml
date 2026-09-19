@@ -11,8 +11,8 @@ spring:
     hikari:
       pool-name: bench-pool
       # The experimental constant. Identical in every blocking variant.
-      maximum-pool-size: ${POOL_SIZE:10}
-      minimum-idle: ${POOL_SIZE:10}
+      maximum-pool-size: ${POOL_SIZE:20}
+      minimum-idle: ${POOL_SIZE:20}
       connection-timeout: 10000
 
 server:
