@@ -13,9 +13,6 @@ java -version     # expect 25.0.4
 k6 version        # expect v2.2.0
 ```
 
-If `k6` is not found, this shell predates the install. Open a new terminal, or
-use the full path `"/c/Program Files/k6/k6.exe"` wherever `k6` appears below.
-
 ---
 
 ## Step 1 — Build
