@@ -8,6 +8,10 @@ numbers that go in a decision memo.
 Fixed for every run: `-Xms1g -Xmx1g -XX:+UseG1GC`, `POOL_SIZE=20`,
 `UPSTREAM_DELAY_MS=200`, k6 v2.2.0, JDK 25.0.4, Spring Boot 4.1.1.
 
+> **Warmup was too short.** These cells used a 10s warmup, which does not reach
+> steady state. Marked figures (⚠) were re-measured with 20s and did not
+> reproduce. Treat every unmarked figure as provisional for the same reason.
+
 ## Reading the tables
 
 All latency figures are **milliseconds**, and are percentiles of k6's
@@ -33,16 +37,18 @@ means the application added ~9ms of its own.
 | variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | mvc-platform | 2000 | 0.00 | 0.0 | 0.5 | 1.6 | 32.5 |
-| mvc-virtual | 2000 | 0.00 | 0.0 | 6.5 | **59.9** | **321.8** |
+| mvc-virtual | 2000 | 0.00 | 0.0 | 6.5 | 59.9 ⚠ | 321.8 ⚠ |
 | webflux-r2dbc | 2000 | 0.00 | 0.0 | 0.5 | 2.6 | 53.9 |
 | mvc-jpa | 2000 | 0.00 | 0.0 | 0.5 | 1.2 | 38.6 |
 
 ### `/db` @ 1,000 rps — cheap query, pool far from binding
 
+⚠ = does not reproduce; see "What does not hold up" below.
+
 | variant | completed rps | errors % | p50 ms | p95 ms | p99 ms | max ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | mvc-platform | 1000 | 0.00 | 1.1 | 15.5 | 89.9 | 214.9 |
-| mvc-virtual | 970 | 1.37 | 1.0 | 36.8 | **422.4** | 805.5 |
+| mvc-virtual | 970 | 1.37 | 1.0 | 36.8 | 422.4 ⚠ | 805.5 |
 | webflux-r2dbc | 1000 | 0.00 | 1.1 | 14.7 | 90.9 | 152.1 |
 | mvc-jpa | 1000 | 0.00 | 1.1 | 5.8 | 15.4 | 62.7 |
 
@@ -119,13 +125,30 @@ that workload by a wide margin (62.57% errors).
 
 ## What does not hold up, and needs re-running on EC2
 
-**mvc-virtual looks bad on short-task workloads, and it is probably an artefact.**
-p99 of 59.9ms on `/nodb` and 422.4ms on `/db`, where every other variant is under
-91ms. The likely cause is local contention: virtual threads run on a ForkJoinPool
-with one carrier per core, so on a 6-core box also running k6, Postgres and the
-stub, the carrier pool is starved in a way that 200 OS-scheduled platform threads
-are not. This would disappear on a dedicated SUT. **Do not report this number
-without re-measuring.**
+**mvc-virtual's poor short-task percentiles were an artefact. Retracted.**
+
+The table above shows `mvc-virtual` at p99 422.4ms on `/db` against 15-91ms for
+everything else, which reads as virtual threads being the worst option. It does
+not reproduce. Re-run with a 20s warmup instead of 10s, three repetitions each:
+
+| variant | rep 1 | rep 2 | rep 3 | median p99 |
+| --- | ---: | ---: | ---: | ---: |
+| mvc-platform | 4.0 | 27.2 | 9.2 | **9.2 ms** |
+| mvc-virtual | 9.8 | 5.4 | 6.4 | **6.4 ms** |
+
+Zero errors on all six runs, full 1,000 rps sustained. `mvc-virtual` is not
+worse here -- its median p99 is slightly *better*, and the spread of both
+overlaps completely. The original figure was a 10s warmup that did not reach
+steady state, reported from a single unrepeated run.
+
+Verified it was not pinning either. A flight recording over ~50,000 requests
+contains **one** `jdk.VirtualThreadPinned` event, lasting 33.9ms, on first-time
+class loading of a Hikari proxy inside `ClassLoader.loadClass` -- a startup
+artefact that cannot recur once the class is loaded. Zero
+`jdk.VirtualThreadSubmitFailed`, so the carrier pool was never exhausted.
+
+The same warmup problem applies to the `/nodb` p99 of 59.9ms, which has not been
+re-measured and should be treated as unreliable rather than as a finding.
 
 **Two cells are INVALID** — k6 dropped iterations during the measured phase, so
 the offered rate was not actually sustained and those rows understate the load.
