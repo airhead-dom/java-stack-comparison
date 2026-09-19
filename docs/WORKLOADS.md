@@ -40,8 +40,8 @@ what `/api` is for.
 | Endpoint | Work | Hold | Latency | In flight @1k TPS | Knee |
 | --- | --- | --- | --- | --- | --- |
 | `/nodb` | constant response | -- | ~1ms | ~1 | web layer |
-| `/db` | one account-summary query | ~1.0ms | ~15ms | ~15 | not pool-bound |
-| `/db-heavy` | one statement query: aggregate + 20 rows | ~1.0ms | ~15ms | ~15 | not pool-bound |
+| `/db` | one account-summary query | 1.0ms | ~2ms | ~2 | not pool-bound |
+| `/db-heavy` | statement query, padded to production hold time | 14.4ms | ~15ms | ~15 | 1,387 (pool) |
 | `/db-slow` | one query, `pg_sleep(0.1)` | 100ms | ~100ms | ~100 | 200 (pool) |
 | `/api` | one 200ms downstream call | -- | ~200ms | **~200** | 1,000 (threads) |
 
@@ -83,10 +83,31 @@ not at the database: twenty index-scanned rows are trivial for Postgres, while
 mapping and serialising them is not free for the JVM. That is worth knowing on
 its own, and it is why the heavy endpoint does not fix the sizing problem.
 
-At ~1ms of hold time the pool saturates around 20,000 TPS and never binds, so
-neither `/db` nor `/db-heavy` is pool-bound as configured. `/db-slow` remains
-the only pool-bound workload. Closing the gap to the stated 15ms production hold
-time requires a deliberate pad, which is not yet applied.
+### The pad, and exactly what it is
+
+`/db-heavy` carries a deliberate `pg_sleep(0.011)` so that it holds a connection
+for the production-reported 15ms. Measured after tuning: **14.42ms** over 300
+warm borrows, putting pool saturation at **1,387 TPS** -- within 4% of the 1,333
+the rate ladder was designed around.
+
+The sleep value is 11ms, not 14ms, because `pg_sleep` carries several
+milliseconds of its own overhead; 14ms produced an 18ms hold. The figure was
+tuned empirically against the measured metric, not calculated.
+
+What the pad does and does not model:
+
+- **Does**: connection occupancy, and therefore pool queueing, saturation and
+  the shape of overload. This is what the rate ladder tests.
+- **Does not**: CPU, I/O or memory pressure. A sleeping connection burns none of
+  them. Any claim about database *throughput* from this endpoint would be wrong.
+
+It stands in for network latency to a remote database and for contention on a
+busy production instance, neither of which a local or same-AZ Postgres
+reproduces.
+
+`/db` is left deliberately unpadded at 1.0ms, so the two endpoints bracket the
+range: one shows the cheap-query case where the pool never binds, the other the
+production-realistic case where it does.
 
 Hibernate measurably costs more inside the connection window: `mvc-jpa` held
 connections 1.93ms on `/db-heavy` against 1.21ms for `mvc-platform` on the same

@@ -49,13 +49,24 @@ public final class BenchmarkQueries {
 			""";
 
 	/**
-	 * One database operation, but genuinely heavy: two index scans over the
-	 * account's transactions (an aggregate over all of them, and the most
-	 * recent twenty) joined to the account and its customer. Returns up to 20
-	 * rows rather than one, so result-set handling and object mapping are
-	 * exercised as well as the round trip.
+	 * One database operation, genuinely heavy on the application side: two index
+	 * scans over the account's transactions (an aggregate over all of them, and
+	 * the most recent twenty) joined to the account and its customer, returning
+	 * up to 20 rows to map rather than one.
+	 *
+	 * The leading sleep is a deliberate pad. Measured warm, this query holds a
+	 * connection for ~1ms because twenty index-scanned rows cost Postgres
+	 * almost nothing -- but production reports ~15ms, which is mostly network
+	 * latency to a remote database plus contention that a local instance cannot
+	 * reproduce. The pad stands in for exactly that, so pool occupancy matches
+	 * production and the saturation knee lands at the designed 1,333 TPS.
+	 *
+	 * It is a stand-in, not real work: a sleeping connection burns no CPU and no
+	 * I/O. Only pool behaviour is modelled faithfully by it. See
+	 * docs/WORKLOADS.md.
 	 */
 	public static final String ACCOUNT_STATEMENT = """
+			with pad as (select pg_sleep(0.011))
 			select a.id             as account_id,
 			       a.account_number as account_number,
 			       a.product_type   as product_type,
@@ -84,6 +95,7 @@ public final class BenchmarkQueries {
 			       t.description    as description,
 			       t.posted_at      as posted_at
 			from accounts a
+			cross join pad
 			join customers c on c.id = a.customer_id
 			join lateral (
 			    select count(*) as total_transactions,
