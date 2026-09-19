@@ -8,7 +8,6 @@
 | `mvc-virtual/` | Identical to `mvc-platform` except `spring.threads.virtual.enabled: true`. |
 | `mvc-jpa/` | Control. Isolates Hibernate's cost with the thread model held fixed against `mvc-platform`. |
 | `webflux-r2dbc/` | WebFlux end to end, `DatabaseClient`. |
-| `webflux-jdbc/` | WebFlux with blocking JDBC on `boundedElastic`. |
 | `stub-service/` | Fake upstream with injectable latency for the `/composite` workload. |
 | `infra/` | `docker-compose.yml` for local dev; `terraform/` for the 3-instance EC2 setup. |
 | `load/` | k6 scenarios plus the run matrix. |
@@ -18,16 +17,22 @@
 
 ## What is being compared
 
-Five variants of the same API. Each differs from the baseline in exactly one
-respect; if two things differ at once, the comparison means nothing.
+Four variants of the same API, measured against `mvc-platform`.
 
-| Variant | The one thing that differs |
+| Variant | What differs from the baseline |
 | --- | --- |
 | `mvc-platform` | -- (baseline) |
 | `mvc-virtual` | virtual threads instead of platform threads |
-| `webflux-r2dbc` | reactive web layer and reactive driver |
-| `webflux-jdbc` | reactive web layer, blocking driver offloaded |
 | `mvc-jpa` | Hibernate instead of `JdbcClient` |
+| `webflux-r2dbc` | reactive web layer **and** reactive driver |
+
+`mvc-virtual` and `mvc-jpa` each change exactly one thing, so a difference in
+their numbers has exactly one cause.
+
+`webflux-r2dbc` changes two at once. The variant that would have separated them
+(WebFlux over blocking JDBC) was deliberately dropped as not a candidate for the
+rewrite, so any gap measured here is the reactive *stack* as a whole -- report it
+that way, and do not attribute it to the thread model alone.
 
 ## Invariants
 

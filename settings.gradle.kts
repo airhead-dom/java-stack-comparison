@@ -6,6 +6,5 @@ include(
     "mvc-virtual",
     "mvc-jpa",
     "webflux-r2dbc",
-    "webflux-jdbc",
     "stub-service",
 )
