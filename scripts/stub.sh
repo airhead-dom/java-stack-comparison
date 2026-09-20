@@ -51,8 +51,13 @@ start() {
         fi
     done
 
-    echo "failed to start - last log lines:"
-    tail -20 "$LOG" | sed 's/^/  /'
+    echo "failed to start"
+    if [ -s "$LOG" ]; then
+        echo "last log lines:"
+        tail -20 "$LOG" | sed 's/^/  /'
+    else
+        echo "  $LOG is empty or missing - the JVM did not get far enough to log"
+    fi
     return 1
 }
 
