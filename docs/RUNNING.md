@@ -267,6 +267,51 @@ export BACKEND_PRIVATE_IP=10.0.0.12
 Public addresses for ssh, private addresses for the instances talking to each
 other.
 
+## Managing the variant on the SUT
+
+`scripts/variant.sh` handles the app under test. Copy it next to the jars:
+
+```bash
+scp -i key.pem scripts/variant.sh ubuntu@<sut-public>:~/
+```
+
+Then on that box:
+
+```bash
+./variant.sh list                  # which jars are present
+./variant.sh start mvc-virtual
+./variant.sh status
+./variant.sh stop
+./variant.sh restart               # same variant again
+./variant.sh log                   # tail -f
+```
+
+Set `BACKEND_IP` at the top of the file to the private address of the Postgres
+and stub box, or pass it: `BACKEND_IP=10.0.0.12 ./variant.sh start mvc-jpa`.
+`POOL_SIZE` and `JVM_FLAGS` override the same way.
+
+**`start` kills every other variant first.** They all bind 8080 deliberately, so
+two at once means the second fails to bind and the load generator keeps
+measuring the first - which produces a result rather than an error, and a result
+labelled as the wrong variant. It kills only the four known jars, so a stub or
+anything else on the box is left alone, waits for a clean exit before forcing,
+and waits for the port to actually free before starting the next JVM.
+
+It also confirms the app reports the variant that was asked for:
+
+```
+clearing anything already running
+  killing mvc-platform (pid 4182)
+  stopped
+starting mvc-virtual
+up after 9s - serving mvc-virtual on 8080
+```
+
+The variant name in that last line comes from `/actuator/prometheus`, not from
+the argument, so starting the wrong jar cannot go unnoticed.
+
+The `r2dbc:` versus `jdbc:` URL scheme is handled for you.
+
 ## Managing the stub on the backend
 
 `scripts/stub.sh` handles the fake downstream. Copy it next to the jar:
