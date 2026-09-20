@@ -267,6 +267,49 @@ export BACKEND_PRIVATE_IP=10.0.0.12
 Public addresses for ssh, private addresses for the instances talking to each
 other.
 
+## Preparing the Ubuntu load generator
+
+Three things to do once on that box, none of which a script can do for itself.
+
+**Stop the background updater.** An apt job waking mid-cell steals CPU from the
+generator and corrupts whichever cell it lands in:
+
+```bash
+sudo systemctl disable --now unattended-upgrades
+```
+
+Worth doing on the SUT too.
+
+**Check the open-file limit.** Each runner raises its own soft limit, but only
+as far as the hard limit allows:
+
+```bash
+ulimit -n        # soft, likely 1024 by default
+ulimit -Hn       # hard
+```
+
+If the hard limit is below ~8192, raise it in `/etc/security/limits.conf` and
+log in again:
+
+```
+ubuntu  soft  nofile  65535
+ubuntu  hard  nofile  65535
+```
+
+A cell pre-allocates roughly `rate x timeout x 1.2` VUs, each holding a socket,
+so the top of the `/db` ladder wants about 2,900 file descriptors. Without them
+k6 fails partway with *too many open files*.
+
+**Ephemeral ports**, only if sustained high rates start failing to connect:
+
+```bash
+sudo sysctl -w net.ipv4.ip_local_port_range="10000 65535"
+sudo sysctl -w net.ipv4.tcp_tw_reuse=1
+```
+
+Use `tmux` for anything longer than a few cells, so a dropped SSH session does
+not take the run with it.
+
 ## Managing the variant on the SUT
 
 `scripts/variant.sh` handles the app under test. Copy it next to the jars:
