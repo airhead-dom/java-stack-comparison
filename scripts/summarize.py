@@ -54,7 +54,13 @@ def read_cell(path):
     dur = metrics.get("http_req_duration{phase:measure}", {}).get("values", {})
     cell = {
         "variant": variant, "workload": workload, "rate": rate, "rep": rep,
+        # Count is scoped to the measured phase; the bare http_reqs spans warmup
+        # too. Rate is taken unscoped on purpose - k6 divides a submetric's
+        # count by the whole test duration, so the scoped rate understates,
+        # while the unscoped one is right because both phases offer the same
+        # rate.
         "rps": val("http_reqs", "rate"),
+        "count": val("http_reqs{phase:measure}", "count") or val("http_reqs", "count"),
         "err": val("http_req_failed{phase:measure}", "rate") * 100,
         "p50": dur.get("p(50)"), "p95": dur.get("p(95)"),
         "p99": dur.get("p(99)"), "max": dur.get("max"),

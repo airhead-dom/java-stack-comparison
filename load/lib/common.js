@@ -89,6 +89,10 @@ export function buildOptions(expectedLatencyMs) {
       // measurement means the generator failed to offer the target rate and
       // the run is not the open-model test it claims to be.
       'dropped_iterations{scenario:measure}': ['count<1'],
+      // Declared only so k6 materialises the submetric. Without it the request
+      // count covers warmup and measurement together, which double-counts
+      // against percentiles that are scoped to measurement alone.
+      'http_reqs{phase:measure}': ['count>0'],
     },
   };
 }
@@ -103,17 +107,31 @@ export function summary(data) {
   return result;
 }
 
+// k6 divides a submetric's count by the whole test duration, warmup included,
+// so its rate understates a measure-scoped count. Derive it from the measured
+// window instead.
+function durationSeconds(spec) {
+  const m = /^(\d+(?:\.\d+)?)(ms|s|m|h)$/.exec(String(spec).trim());
+  if (!m) return NaN;
+  const n = Number(m[1]);
+  return { ms: n / 1000, s: n, m: n * 60, h: n * 3600 }[m[2]];
+}
+
 function textSummary(data) {
   const m = data.metrics;
   const dur = m['http_req_duration{phase:measure}'] || m.http_req_duration || { values: {} };
   const failed = m['http_req_failed{phase:measure}'] || m.http_req_failed || { values: {} };
-  const reqs = m.http_reqs || { values: {} };
+  const reqs = m['http_reqs{phase:measure}'] || m.http_reqs || { values: {} };
   const dropped = m.dropped_iterations || { values: { count: 0 } };
   const v = dur.values || {};
+  const count = reqs.values.count || 0;
+  const secs = durationSeconds(DURATION);
+  const achieved = Number.isFinite(secs) && secs > 0 ? count / secs : NaN;
   return [
     '',
     `  offered rate      ${RATE} rps`,
-    `  completed         ${(reqs.values.count || 0).toFixed(0)} (${(reqs.values.rate || 0).toFixed(1)} rps)`,
+    `  measured for      ${DURATION} (after ${WARMUP} discarded)`,
+    `  completed         ${count.toFixed(0)}${Number.isFinite(achieved) ? ` (${achieved.toFixed(1)} rps)` : ''}`,
     `  dropped           ${dropped.values.count || 0}`,
     `  error rate        ${(((failed.values.rate) || 0) * 100).toFixed(2)}%`,
     `  p50 / p95 / p99   ${fmt(v['p(50)'])} / ${fmt(v['p(95)'])} / ${fmt(v['p(99)'])} ms`,
