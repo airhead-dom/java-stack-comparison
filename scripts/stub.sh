@@ -9,6 +9,9 @@
 #   ./stub.sh status
 #   ./stub.sh log
 #
+# Ubuntu. Needs java, curl and pgrep (procps); only java is not on a stock
+# server image.
+#
 # The stub is the fake downstream that /api calls. If it dies mid-run, every
 # /api cell afterwards measures connection refusals instead of the application,
 # and the k6 output looks like a result rather than a failure - so check status
@@ -22,15 +25,8 @@ PORT="${PORT:-9099}"
 LOG="${LOG:-stub.log}"
 HEALTH="http://localhost:$PORT/actuator/health"
 
-# pgrep is not everywhere (Git Bash, minimal images), so fall back to ps. The
-# bracket around the first letter stops the grep matching its own command line.
-pid() {
-    if command -v pgrep >/dev/null 2>&1; then
-        pgrep -f "$JAR" | head -1
-    else
-        ps -ef 2>/dev/null | grep "[j]ava.*$JAR" | awk '{print $2}' | head -1
-    fi
-}
+# Matches the full command line, so it finds the jar however it was started.
+pid() { pgrep -f "java.*$JAR" | head -1; }
 
 # The authority on whether the stub is usable. A pid only says a process
 # exists; this says it is serving.
@@ -42,6 +38,7 @@ start() {
         return 0
     fi
     [ -f "$JAR" ] || { echo "$JAR not found in $PWD"; return 1; }
+    command -v java >/dev/null || { echo "java not on PATH"; return 1; }
 
     echo "starting $JAR"
     nohup java -jar "$JAR" > "$LOG" 2>&1 &
@@ -64,8 +61,9 @@ stop() {
     p=$(pid)
     if [ -z "$p" ]; then
         if alive; then
-            echo "port $PORT is served but no matching process was found"
-            echo "something other than $JAR is listening - check by hand"
+            echo "port $PORT is served but no $JAR process was found"
+            echo "something else is listening:"
+            ss -lptn "sport = :$PORT" 2>/dev/null | sed 's/^/  /'
             return 1
         fi
         echo "not running"

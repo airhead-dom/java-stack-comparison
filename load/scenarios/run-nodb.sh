@@ -13,6 +13,11 @@ OUTDIR="${OUTDIR:-$HOME/results}"
 BASE="http://$SUT:8080"
 mkdir -p "$OUTDIR"
 
+command -v k6 >/dev/null || { echo "k6 not on PATH"; exit 1; }
+# Used to detect dropped iterations. Without it, a cell that failed to sustain
+# the offered rate would be recorded as though it were valid.
+command -v python3 >/dev/null || { echo "python3 not on PATH (apt install -y python3)"; exit 1; }
+
 # Ask the app which variant it is rather than being told. Every metric carries a
 # variant tag, so a result cannot be mislabelled by having started the wrong jar.
 VARIANT=$(curl -s --max-time 5 "$BASE/actuator/prometheus" | grep -m1 -o 'variant="[^"]*"' | cut -d'"' -f2)
