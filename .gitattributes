@@ -1,3 +1,13 @@
 /gradlew text eol=lf
 *.bat text eol=crlf
 *.jar binary
+
+# Everything below runs on Ubuntu. Checked out with LF even on Windows, so a
+# file copied straight from the working tree with scp still works there - a
+# CRLF shebang gives "bad interpreter: No such file or directory".
+*.sh   text eol=lf
+*.js   text eol=lf
+*.py   text eol=lf
+*.sql  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
