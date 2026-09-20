@@ -267,6 +267,40 @@ export BACKEND_PRIVATE_IP=10.0.0.12
 Public addresses for ssh, private addresses for the instances talking to each
 other.
 
+## Managing the stub on the backend
+
+`scripts/stub.sh` handles the fake downstream. Copy it next to the jar:
+
+```bash
+scp -i key.pem scripts/stub.sh ubuntu@<backend-public>:~/
+```
+
+Then on that box:
+
+```bash
+./stub.sh status      # running? healthy? actually delaying?
+./stub.sh start
+./stub.sh stop
+./stub.sh restart
+./stub.sh log         # tail -f
+```
+
+`status` checks three things, because the first two can pass while the thing is
+still useless:
+
+```
+stub:    running, pid 3412
+health:  ok on 9099
+delay:   ok, 0.213s for delayMs=200
+```
+
+The delay check matters. A stub that answers `/actuator/health` but ignores
+`delayMs` would leave every `/api` cell measuring something other than a 200ms
+upstream call, and nothing in the k6 output would look wrong.
+
+Run `./stub.sh status` before an `/api` ladder. If the stub dies mid-run, the
+cells after it measure connection refusals and report them as a result.
+
 ## Run from the load generator
 
 One standalone script per workload. No ssh, no orchestration: they talk to the

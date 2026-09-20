@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-#
-# Runs the nodb rate ladder against whatever variant is currently running on the
-# SUT. No database, no upstream: web layer only.
-#
-# Start a variant on the app server yourself first, then run this here:
-#
-#   ./run-nodb.sh              # the whole ladder
-#   ./run-nodb.sh 1000         # one rate
-#
-# No ssh. The only things it touches are the SUT's HTTP port and k6.
 
 set -uo pipefail
 cd "$(dirname "$0")"
