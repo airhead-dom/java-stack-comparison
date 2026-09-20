@@ -28,20 +28,27 @@ export function randomAccountId() {
  *        documentation; VU sizing deliberately uses the timeout instead.
  */
 export function buildOptions(expectedLatencyMs) {
-  // in flight = rate x latency. Four times that leaves room for the queue to
-  // grow during overload -- if k6 runs out of VUs it silently stops offering
-  // the target rate and becomes a closed-model test without saying so.
-  // Size for the SATURATED case, not the healthy one. Under overload latency
-  // grows until it hits the timeout, so worst-case concurrency is rate x
-  // timeout -- at 1,500 rps with healthy latency of 210ms a 4x margin looks
-  // generous and is not: measured latency reached 1,333ms and the pool ran dry,
-  // dropping a third of the offered load without the run failing.
-  const maxVUs = Math.max(100, Math.ceil(RATE * (TIMEOUT_MS / 1000) * 1.2));
-  // Allocate the whole pool up front. Growing it on demand costs time exactly
-  // when the system is saturating and demand is climbing fastest, which is
-  // when drops are least affordable. Memory is the trade: a VU costs a couple
-  // of MB, so a 2,000-VU run wants a load generator with several GB free.
-  const preAllocatedVUs = maxVUs;
+  // Two different numbers, for two different jobs.
+  //
+  // preAllocatedVUs is created up front and costs memory - roughly 2MB each.
+  // Size it from HEALTHY concurrency (Little's Law: rate x latency) with a 4x
+  // margin. The margin is what prevents iterations being dropped while the
+  // pool grows during ramp-up; 50 was far too few and cost a third of the
+  // offered load on an early run.
+  const healthyInFlight = RATE * (expectedLatencyMs / 1000);
+  const preAllocatedVUs = Math.max(100, Math.ceil(healthyInFlight * 4));
+
+  // maxVUs is only a ceiling. k6 grows into it if latency degrades, and unused
+  // headroom costs nothing, so size it for the SATURATED case: under overload
+  // latency climbs until it hits the timeout, making worst-case concurrency
+  // rate x timeout. Measured latency once reached 1,333ms against a healthy
+  // 210ms, and a pool sized for healthy alone ran dry mid-run.
+  //
+  // Sizing pre-allocation from the timeout instead would be ruinous: /nodb at
+  // 8,000 rps serves ~8 concurrent requests but would pre-allocate 9,600 VUs,
+  // about 19GB, for no benefit.
+  const maxVUs = Math.max(preAllocatedVUs,
+                          Math.ceil(RATE * (TIMEOUT_MS / 1000) * 1.2));
 
   return {
     // k6 reports avg/med/p(90)/p(95) by default; the SLA is stated at p99 and

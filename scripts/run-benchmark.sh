@@ -37,7 +37,7 @@ DB_USER="${DB_USER:-bench}"
 DB_PASSWORD="${DB_PASSWORD:-bench}"
 EXPECTED_ACCOUNTS="${EXPECTED_ACCOUNTS:-200000}"   # rows the seed should have left
 
-REPS="${REPS:-1}"                # repetitions per cell
+REPS="${REPS:-2}"                # repetitions per cell
 DURATION="${DURATION:-60s}"      # measured window
 WARMUP="${WARMUP:-60s}"          # discarded window; 60s minimum, see docs
 POOL_SIZE="${POOL_SIZE:-20}"
@@ -46,11 +46,11 @@ JVM_FLAGS="${JVM_FLAGS:--Xms1g -Xmx1g -XX:+UseG1GC}"
 VARIANTS="${VARIANTS:-mvc-platform mvc-virtual webflux-r2dbc mvc-jpa}"
 
 # Rate ladders, derived in docs/WORKLOADS.md from the measured knees.
-RATES_nodb="1000 2000 4000 8000"
-RATES_db="400 800 1000 1200 1600 2400"
-RATES_db_heavy="400 800 1000 1200 1600 2400"
-RATES_db_slow="50 100 150 200 300 400"
-RATES_api="250 500 1000 1500 2000"
+RATES_nodb="500 1000 1500 2000"
+RATES_db="500 1000 1500 2000"
+RATES_db_heavy="500 1000 1500 2000"
+RATES_db_slow="500 1000 1500 2000"
+RATES_api="500 1000 1500 2000"
 
 # ---------------------------------------------------------------------------
 

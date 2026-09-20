@@ -4,8 +4,8 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 SUT="${SUT:-172.31.15.61}"
-RATES="${1:-1000 2000 4000 8000}"
-REPS="${REPS:-3}"
+RATES="${1:-500 1000 1500 2000}"
+REPS="${REPS:-2}"
 DURATION="${DURATION:-60s}"
 WARMUP="${WARMUP:-60s}"
 OUTDIR="${OUTDIR:-$HOME/results}"

@@ -418,13 +418,20 @@ cd ~/scenarios
 REPS=1 ./run-api.sh 1500  # one rate, one repetition
 ```
 
-| script | rates | what it exercises |
+All five use the same ladder - **500 1000 1500 2000**, two repetitions:
+
+| script | what it exercises | knee |
 | --- | --- | --- |
-| `run-nodb.sh` | 1000 2000 4000 8000 | web layer only |
-| `run-db.sh` | 400 800 1000 1200 1600 2400 | cheap query, ~1ms hold |
-| `run-db-heavy.sh` | 400 800 1000 1200 1600 2400 | 15ms hold, pool binds ~1,387 |
-| `run-db-slow.sh` | 50 100 150 200 300 400 | 100ms hold, pool binds ~200 |
-| `run-api.sh` | 250 500 1000 1500 2000 | 200ms upstream, threads bind ~1,000 |
+| `run-nodb.sh` | web layer only | none on this ladder |
+| `run-db.sh` | cheap query, ~1ms hold | none on this ladder |
+| `run-db-heavy.sh` | 15ms hold | pool, ~1,387 |
+| `run-db-slow.sh` | 100ms hold | pool, ~200 - **saturated at every rung** |
+| `run-api.sh` | 200ms upstream | threads, ~1,000 |
+
+`run-db-slow.sh` is past its pool's capacity at the lowest rate on the ladder,
+so every cell will queue and time out identically in all four variants. Give it
+its own ladder if you want anything from it:
+`./run-db-slow.sh "50 100 150 200 300"`.
 
 Set `SUT=` if the app server's private IP differs from the default in the
 script. `OUTDIR=`, `REPS=`, `DURATION=` and `WARMUP=` all override too.

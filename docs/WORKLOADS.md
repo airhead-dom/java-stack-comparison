@@ -57,14 +57,25 @@ model does not matter for plain database work at this load.
 
 ## Rate ladders
 
-| Workload | Rates (TPS) |
-| --- | --- |
-| `/nodb` | 1,000 / 2,000 / 4,000 / 8,000 |
-| `/db` | 400 / 800 / 1,000 / 1,200 / 1,600 / 2,400 |
-| `/db-slow` | 50 / 100 / 150 / 200 / 300 / 400 |
-| `/api` | 250 / 500 / 1,000 / 1,500 / 2,000 |
+One ladder for every workload: **500 / 1,000 / 1,500 / 2,000 TPS**, two
+repetitions per cell. A single ladder makes the variants directly comparable at
+the same offered rate, and straddles the 1,000 TPS target on both sides.
 
-Three repetitions per cell, order randomised, containers restarted between runs.
+The knees fall at different places on it:
+
+| Workload | Binds at | Position on the ladder |
+| --- | --- | --- |
+| `/nodb` | web layer, far above | never binds; a control |
+| `/db` | ~19,900 (pool) | never binds |
+| `/db-heavy` | ~1,387 (pool) | between 1,000 and 1,500 |
+| `/db-slow` | ~200 (pool) | **below the whole ladder** |
+| `/api` | ~1,000 (threads) | at the second rung |
+
+`/db-slow` is saturated at every rate here. Its pool serves 200 TPS and the
+lowest rung offers 500, so expect queueing and timeouts in every cell, identical
+across variants. That is a property of the pool, not of the thread model. To get
+anything else from it, either run it on its own low ladder
+(`./run-db-slow.sh "50 100 150 200 300"`) or raise `POOL_SIZE` for those runs.
 
 ## Calibration: measured, and still short of 15ms
 
