@@ -105,6 +105,17 @@ start() {
     kill_all
     wait_port_free
 
+    # The long-wait workloads hold one upstream socket per request in flight for
+    # the whole delay - up to 2,000 at once on /api-1000 - on top of the inbound
+    # connection. A webflux /api cell already reported 1,375 open files at a
+    # 200ms delay. Ubuntu's 1024 default would bind here long before anything
+    # about either thread model did, and the run would look like a result.
+    ulimit -n 65535 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
+    if [ "$(ulimit -n)" -lt 8192 ]; then
+        echo "  WARNING: open file limit is $(ulimit -n); the long-wait"
+        echo "           workloads need several thousand"
+    fi
+
     echo "starting $want"
     DB_URL="$(db_url_for "$want")" \
     DB_USER="$DB_USER" \

@@ -44,6 +44,8 @@ what `/api` is for.
 | `/db-heavy` | statement query, padded to production hold time | 14.4ms | ~15ms | ~15 | 1,387 (pool) |
 | `/db-slow` | one query, `pg_sleep(0.1)` | 100ms | ~100ms | ~100 | 200 (pool) |
 | `/api` | one 200ms downstream call | -- | ~200ms | **~200** | 1,000 (threads) |
+| `/api-800` | one 800ms downstream call | -- | ~810ms | **~800** | no thread knee |
+| `/api-1000` | one 1,000ms downstream call | -- | ~1,010ms | **~1,000** | no thread knee |
 
 `/api` is the decisive workload. It touches no database, so the connection pool
 cannot explain anything that happens; each request simply occupies a thread for
@@ -70,6 +72,8 @@ The knees fall at different places on it:
 | `/db-heavy` | ~1,387 (pool) | between 1,000 and 1,500 |
 | `/db-slow` | ~200 (pool) | **below the whole ladder** |
 | `/api` | ~1,000 (threads) | at the second rung |
+| `/api-800` | nothing, for the two candidates | never binds |
+| `/api-1000` | nothing, for the two candidates | never binds |
 
 `/db-slow` is saturated at every rate here. Its pool serves 200 TPS and the
 lowest rung offers 500, so expect queueing and timeouts in every cell, identical
@@ -131,6 +135,72 @@ R2DBC pool gauges are exported by Spring Boot as `r2dbc_pool_*_connections`, so
 R2DBC equivalent of Hikari's `connections_usage_seconds` timer, so mean hold
 time cannot be read directly from `webflux-r2dbc` and must be inferred from
 latency.
+
+## The long-wait workloads: `/api-800` and `/api-1000`
+
+`/api` was sized so that in-flight concurrency lands exactly on Tomcat's 200
+threads. That made it decisive about `mvc-platform`, and that question is now
+answered. These two ask a different one.
+
+At an 800ms or 1,000ms delay the same rate ladder puts far more requests in
+flight, and past any thread count either candidate has:
+
+| | in flight @500 | @1,000 | @1,500 | @2,000 |
+| --- | ---: | ---: | ---: | ---: |
+| `/api` | 100 | 200 | 300 | 400 |
+| `/api-800` | 400 | 800 | 1,200 | 1,600 |
+| `/api-1000` | 500 | 1,000 | 1,500 | 2,000 |
+
+At a one-second delay the offered rate and the in-flight count are the same
+number, which is what makes that endpoint worth having beside the 800ms one:
+two points on a line rather than one measurement to be interpreted.
+
+**Neither stack has a knee here, and that is the point.** Nothing about a thread
+count binds for `mvc-virtual` or `webflux-r2dbc` at these rates, so what these
+cells measure is the *cost of holding a request that is waiting* -- heap, CPU
+and sockets against in-flight count -- rather than where throughput stops.
+Expect a curve, not a cliff.
+
+### Only two variants
+
+`mvc-platform` and `mvc-jpa` do not implement these endpoints. 200 Tomcat
+threads over an 800ms hold cap `mvc-platform` at
+
+```
+200 / 0.8s = 250 TPS
+```
+
+which is below the bottom rung of the ladder, so every cell would be the same
+saturation result already established by `/api` at 1,500 rps. The runners check
+the endpoint answers 200 before starting, rather than recording 404s as data.
+
+### What had to change to measure it
+
+- **The generator is the binding constraint, not the SUT.** k6 needs roughly one
+  VU per request in flight, and the default 4x pre-allocation margin -- tuned
+  when healthy concurrency was ~15 -- would ask for 8,080 VUs at 2,000 rps, about
+  16GB. These scenarios pass `vuMargin: 1.3`, and the runners refuse a cell that
+  does not fit in the generator's memory rather than dropping iterations and
+  calling it a result.
+- **Timeouts.** The shared 1,000ms default is *below* `/api-1000`'s healthy
+  latency and would fail every request. The two scenarios set 2,000ms and
+  2,500ms, with the SLA at delay + 300ms to match `/api`'s 200 + 300.
+- **Sampling during the run.** The before/after scrape pair every other workload
+  uses is taken while the system is idle, so a gauge reads 0 in-flight and
+  whatever GC left behind for heap. These runners sample the SUT every 2s for
+  the whole cell into `$tag.samples.csv`, which is the only way the in-flight
+  question gets answered -- and it also gives heap a distribution instead of the
+  single unusable point the AWS run had to report.
+- **File descriptors and connection caps.** One upstream socket per request in
+  flight, for the whole delay. Ubuntu's 1,024 default and the reactive client's
+  previous fixed 2,000-connection cap would both have bound at the top rung, and
+  either would have looked like a property of the thread model.
+
+Measured in-flight comes from Micrometer's active-request timer. It publishes a
+single series labelled `uri="UNKNOWN"` whatever the endpoint -- an in-flight
+request has no resolved uri or outcome yet -- so it cannot be split per
+endpoint. A cell runs one workload, so the total, less one for the scrape
+itself, is that workload's in-flight count.
 
 ## Deliberately out of scope
 

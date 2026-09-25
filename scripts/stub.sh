@@ -23,6 +23,11 @@ cd "$(dirname "$0")"
 JAR="${JAR:-stub-service-0.0.1-SNAPSHOT.jar}"
 PORT="${PORT:-9099}"
 LOG="${LOG:-stub.log}"
+# Pinned rather than left to the default heuristic, which sizes from the box and
+# so would differ between the backend and anywhere this is reproduced. The stub
+# holds delayed connections, not data; 512m is ample and it is now a constant of
+# the experiment rather than a property of the machine.
+JVM_FLAGS="${JVM_FLAGS:--Xms512m -Xmx512m -XX:+UseG1GC}"
 HEALTH="http://localhost:$PORT/actuator/health"
 
 # Matches the full command line, so it finds the jar however it was started.
@@ -40,8 +45,17 @@ start() {
     [ -f "$JAR" ] || { echo "$JAR not found in $PWD"; return 1; }
     command -v java >/dev/null || { echo "java not on PATH"; return 1; }
 
+    # One inbound socket per in-flight request, for the whole delay: /api-1000
+    # at 2,000 rps parks 2,000 of them here at once. Ubuntu's 1024 default would
+    # make the stub the bottleneck, which is the one thing it must never be.
+    ulimit -n 65535 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
+    if [ "$(ulimit -n)" -lt 8192 ]; then
+        echo "  WARNING: open file limit is $(ulimit -n); the long-wait"
+        echo "           workloads park several thousand connections here"
+    fi
+
     echo "starting $JAR"
-    nohup java -jar "$JAR" > "$LOG" 2>&1 &
+    nohup java $JVM_FLAGS -jar "$JAR" > "$LOG" 2>&1 &
 
     for i in $(seq 1 30); do
         sleep 1
@@ -109,16 +123,31 @@ status() {
     fi
 
     # Health alone is not enough. A stub that answers but ignores delayMs would
-    # silently turn every /api cell into a measurement of something else.
-    local t
-    t=$(curl -s -o /dev/null -w '%{time_total}' --max-time 5 \
-        "http://localhost:$PORT/upstream?delayMs=200" 2>/dev/null)
-    if awk "BEGIN{exit !(${t:-0} > 0.15)}" 2>/dev/null; then
-        echo "delay:   ok, ${t}s for delayMs=200"
+    # silently turn every /api cell into a measurement of something else. Both
+    # delays are checked: honouring 200 does not prove it honours 800, and the
+    # long-wait workloads are the ones where a wrong delay would be hardest to
+    # spot in the results.
+    local ok=0 t
+    for want in 0.2 0.8; do
+        t=$(curl -s -o /dev/null -w '%{time_total}' --max-time 5 \
+            "http://localhost:$PORT/upstream?delayMs=$(awk "BEGIN{print $want*1000}")" 2>/dev/null)
+        if awk "BEGIN{exit !(${t:-0} > $want*0.75 && ${t:-0} < $want*2)}" 2>/dev/null; then
+            echo "delay:   ok, ${t}s for ${want}s"
+        else
+            echo "delay:   WRONG - returned in ${t}s, expected ~${want}s"
+            ok=1
+        fi
+    done
+
+    # The runners sample this during every long-wait cell as the witness that
+    # the stub was not the bottleneck. Missing, there is no such evidence.
+    if curl -sf --max-time 5 "http://localhost:$PORT/actuator/prometheus" >/dev/null 2>&1; then
+        echo "metrics: ok on $PORT/actuator/prometheus"
     else
-        echo "delay:   WRONG - returned in ${t}s, expected ~0.2s"
-        return 1
+        echo "metrics: MISSING - the long-wait runners cannot sample the stub"
+        ok=1
     fi
+    return $ok
 }
 
 case "${1:-status}" in

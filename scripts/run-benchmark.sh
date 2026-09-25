@@ -51,6 +51,21 @@ RATES_db="500 1000 1500 2000"
 RATES_db_heavy="500 1000 1500 2000"
 RATES_db_slow="500 1000 1500 2000"
 RATES_api="500 1000 1500 2000"
+# The long-wait workloads. Same ladder, so their cells sit beside the 200ms
+# /api ones, but the delay makes in-flight concurrency the scarce resource
+# rather than thread count: /api-1000 at 2,000 rps is 2,000 requests in flight.
+RATES_api_800="500 1000 1500 2000"
+RATES_api_1000="500 1000 1500 2000"
+
+# Only these two implement /api-800 and /api-1000, and only these two are
+# candidates. 200 Tomcat threads over an 800ms hold cap mvc-platform at 250 rps,
+# below the bottom rung, so every cell of it would be the same saturation
+# result.
+LONG_VARIANTS="${LONG_VARIANTS:-mvc-virtual webflux-r2dbc}"
+
+# Seconds between mid-run samples of the SUT. The before/after scrape pair is
+# taken while the system is idle, so it cannot see an in-flight count at all.
+SAMPLE_EVERY="${SAMPLE_EVERY:-5}"
 
 # ---------------------------------------------------------------------------
 
@@ -92,7 +107,8 @@ FAILED=0
 
 usage() {
     echo "usage: $0 <workload|all|check> [rate]"
-    echo "  workloads: nodb db db-heavy db-slow api"
+    echo "  workloads: nodb db db-heavy db-slow api api-800 api-1000"
+    echo "  'all' runs the original five; the long-wait two are named explicitly"
     exit 1
 }
 
@@ -274,10 +290,13 @@ preflight() {
     fi
 
     local missing=""
-    for wl in nodb db db-heavy db-slow api; do
+    local scenarios="nodb db db-heavy db-slow api api-800 api-1000"
+    local nscenarios=0
+    for wl in $scenarios; do
+        nscenarios=$((nscenarios + 1))
         $SSH "$LOADGEN_HOST" "test -f $LOADGEN_DIR/$wl.js" || missing="$missing $wl.js"
     done
-    if [ -z "$missing" ]; then ok "k6 scenarios present" "5 files"; else
+    if [ -z "$missing" ]; then ok "k6 scenarios present" "$nscenarios files"; else
         bad "k6 scenarios present" "missing:$missing"
     fi
 
@@ -315,7 +334,7 @@ run_cell() {
     # mid-matrix and leave every later cell silently measuring failures. The
     # stub is restarted rather than skipped, so one crash costs a few seconds
     # instead of every remaining /api cell.
-    if [ "$workload" = "api" ]; then
+    if [ "${workload#api}" != "$workload" ]; then
         ensure_stub "    " \
             || { echo "    SKIPPED: stub down and could not be restarted"; return 1; }
     else
@@ -352,6 +371,8 @@ run_cell() {
         db-heavy) probe="/db-heavy?accountId=12345" ;;
         db-slow)  probe="/db-slow?accountId=12345" ;;
         api)      probe="/api" ;;
+        api-800)  probe="/api-800" ;;
+        api-1000) probe="/api-1000" ;;
     esac
     local code
     code=$($SSH "$SUT_HOST" "curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
@@ -366,18 +387,38 @@ run_cell() {
     $SSH "$SUT_HOST" 'curl -s http://localhost:8080/actuator/prometheus' \
         > "$OUT_DIR/$tag.metrics.before.txt"
 
-    # 5. load
+    # 5. sample the SUT while the load runs. A gauge read either side of the
+    #    window is read while the system is idle: in-flight is 0 and heap is
+    #    wherever GC left it. The long-wait workloads exist to measure what is
+    #    in flight DURING load, so that has to be sampled during load. Every
+    #    sample goes through the multiplexed ssh connection, so it costs one
+    #    actuator request against a system serving thousands.
+    local sampler_pid=""
+    if [ "${workload#api-}" != "$workload" ]; then
+        sample_sut "$OUT_DIR/$tag.samples.csv" &
+        sampler_pid=$!
+    fi
+
+    # 6. load
     $SSH "$LOADGEN_HOST" "cd $LOADGEN_DIR && \
         BASE_URL=http://$SUT_PRIVATE_IP:8080 RATE=$rate \
         DURATION=$DURATION WARMUP=$WARMUP OUT=$tag.json \
         k6 run --quiet --no-color $workload.js" 2>&1 \
         | grep -vE 'level=(warning|error)' | sed 's/^/    /'
 
-    # 6. metrics after - must happen before the JVM is stopped
+    if [ -n "$sampler_pid" ]; then
+        kill "$sampler_pid" 2>/dev/null
+        wait "$sampler_pid" 2>/dev/null
+        awk -F, 'NR > 1 && $2 > 0 { n++; s += $2; h += $4; if ($2 > m) m = $2 }
+                 END { if (n) printf "    in flight         %d mean, %d peak   |  heap %.0fMB mean\n",
+                                     s/n, m, h/n/1048576 }' "$OUT_DIR/$tag.samples.csv"
+    fi
+
+    # 7. metrics after - must happen before the JVM is stopped
     $SSH "$SUT_HOST" 'curl -s http://localhost:8080/actuator/prometheus' \
         > "$OUT_DIR/$tag.metrics.after.txt"
 
-    # 7. stop, then collect
+    # 8. stop, then collect
     stop_variant
 
     # Fetched over ssh rather than scp. Since OpenSSH 9.0 scp speaks SFTP,
@@ -396,7 +437,7 @@ run_cell() {
         echo "             ssh $LOADGEN_HOST 'ls $LOADGEN_DIR/*.json'"
     fi
 
-    # 8. flag cells where k6 could not sustain the offered rate
+    # 9. flag cells where k6 could not sustain the offered rate
     if [ -f "$OUT_DIR/$tag.json" ]; then
         local dropped
         dropped=$(python -c "
@@ -410,6 +451,36 @@ print(int(m.get('dropped_iterations{scenario:measure}',{}).get('values',{}).get(
         fi
     fi
     sleep 5   # let sockets drain before the next JVM binds 8080
+}
+
+# One CSV row every SAMPLE_EVERY seconds until killed. in_flight is every
+# request the SUT has in progress, less one for this scrape: Micrometer's
+# active-request timer publishes a single series labelled uri="UNKNOWN" whatever
+# the endpoint - an in-flight request has no resolved uri or outcome yet - so it
+# cannot be filtered per endpoint. A cell runs one workload, so the total is
+# that workload's in-flight count. active_raw keeps the uncorrected reading so
+# the adjustment stays visible.
+sample_sut() {
+    local out="$1" t=0
+    echo "t_s,in_flight,active_raw,heap_used_b,live_data_b,cpu,threads_live,files_open" > "$out"
+    while true; do
+        $SSH "$SUT_HOST" 'curl -s http://localhost:8080/actuator/prometheus' 2>/dev/null \
+            | awk -v T="$t" '
+                # The value is the last field: label values may contain spaces,
+                # as in id="G1 Eden Space".
+                /^jvm_memory_used_bytes\{area="heap"/          { heap += $NF }
+                /^http_server_requests_active_seconds_count\{/ { active += $NF }
+                /^jvm_gc_live_data_size_bytes/                 { live = $NF }
+                /^process_cpu_usage/                           { cpu = $NF }
+                /^jvm_threads_live_threads/                    { threads = $NF }
+                /^process_files_open_files/                    { files = $NF }
+                END { inflight = active - 1    # this scrape is itself in flight
+                      if (inflight < 0) inflight = 0
+                      printf "%s,%d,%d,%.0f,%.0f,%s,%d,%d\n",
+                             T, inflight, active, heap, live, (cpu == "" ? 0 : cpu), threads, files }' >> "$out"
+        t=$((t + SAMPLE_EVERY))
+        sleep "$SAMPLE_EVERY"
+    done
 }
 
 # ---------------------------------------------------------------------------
@@ -440,6 +511,9 @@ fi
 # run - thermal, a noisy neighbour, a background job - cannot correlate with one
 # variant and masquerade as a result.
 CELLS=()
+# Deliberately still the original five. The long-wait workloads take four times
+# as long per cell and answer a different question, so they are named
+# explicitly rather than swept up by 'all'.
 if [ "$WORKLOAD" = "all" ]; then
     WORKLOADS="nodb db db-heavy db-slow api"
 else
@@ -453,7 +527,12 @@ for wl in $WORKLOADS; do
         rates=$(rates_for "$wl")
         [ -n "$rates" ] || { echo "unknown workload: $wl"; usage; }
     fi
-    for variant in $VARIANTS; do
+    # The long-wait workloads only exist on the two candidates.
+    wl_variants="$VARIANTS"
+    if [ "${wl#api-}" != "$wl" ]; then
+        wl_variants="$LONG_VARIANTS"
+    fi
+    for variant in $wl_variants; do
         for rate in $rates; do
             for rep in $(seq 1 "$REPS"); do
                 CELLS+=("$variant $wl $rate $rep")

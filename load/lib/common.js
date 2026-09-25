@@ -16,6 +16,9 @@ export const ACCOUNT_MAX = Number(__ENV.ACCOUNT_MAX || 200000);
 // makes the VU pool sizeable at all.
 export const TIMEOUT_MS = Number(__ENV.TIMEOUT_MS || 1000);
 export const PARAMS = { timeout: `${TIMEOUT_MS}ms` };
+// A hard ceiling on VUs, for generators that cannot afford the derived one.
+// Unset means no clamp, which is every workload whose in-flight count is small.
+export const VU_BUDGET = Number(__ENV.VU_BUDGET || 0);
 
 // Spread reads across the whole table. Hammering one account would measure
 // Postgres' cache and the JVM's, not the system.
@@ -28,6 +31,25 @@ export function randomAccountId() {
  *        documentation; VU sizing deliberately uses the timeout instead.
  */
 export function buildOptions(expectedLatencyMs) {
+  return workload({ latencyMs: expectedLatencyMs }).options;
+}
+
+/**
+ * The same thing with the per-workload knobs exposed. The defaults reproduce
+ * buildOptions exactly, so the five original scenarios are unaffected.
+ *
+ * @param latencyMs healthy latency for this workload, for VU sizing
+ * @param timeoutMs request timeout. The 1,000ms default fails every request of
+ *        a workload whose healthy latency is near or above it, so the long-wait
+ *        scenarios must set their own.
+ * @param slaMs the p99 threshold
+ * @param vuMargin pre-allocation margin over healthy concurrency
+ * @returns { options, params, preAllocatedVUs, maxVUs, clampedFrom }
+ */
+export function workload({ latencyMs, timeoutMs = 1000, slaMs = 500, vuMargin = 4 }) {
+  const timeout = Number(__ENV.TIMEOUT_MS || timeoutMs);
+  const sla = Number(__ENV.SLA_MS || slaMs);
+
   // Two different numbers, for two different jobs.
   //
   // preAllocatedVUs is created up front and costs memory - roughly 2MB each.
@@ -35,8 +57,13 @@ export function buildOptions(expectedLatencyMs) {
   // margin. The margin is what prevents iterations being dropped while the
   // pool grows during ramp-up; 50 was far too few and cost a third of the
   // offered load on an early run.
-  const healthyInFlight = RATE * (expectedLatencyMs / 1000);
-  const preAllocatedVUs = Math.max(100, Math.ceil(healthyInFlight * 4));
+  //
+  // That 4x assumes healthy concurrency is a small number. On the long-wait
+  // workloads it is not - /api-1000 at 2,000 rps is 2,000 in flight before any
+  // margin at all - so those scenarios pass a much smaller one. Multiplying an
+  // already-large number by four is what would exhaust the generator.
+  const healthyInFlight = RATE * (latencyMs / 1000);
+  const preAllocatedVUs = Math.max(100, Math.ceil(healthyInFlight * vuMargin));
 
   // maxVUs is only a ceiling. k6 grows into it if latency degrades, and unused
   // headroom costs nothing, so size it for the SATURATED case: under overload
@@ -47,10 +74,19 @@ export function buildOptions(expectedLatencyMs) {
   // Sizing pre-allocation from the timeout instead would be ruinous: /nodb at
   // 8,000 rps serves ~8 concurrent requests but would pre-allocate 9,600 VUs,
   // about 19GB, for no benefit.
-  const maxVUs = Math.max(preAllocatedVUs,
-                          Math.ceil(RATE * (TIMEOUT_MS / 1000) * 1.2));
+  const wanted = Math.max(preAllocatedVUs,
+                          Math.ceil(RATE * (timeout / 1000) * 1.2));
 
-  return {
+  // "Headroom costs nothing" stops being true once the headroom exceeds the
+  // generator's memory. An overload cell really does grow into maxVUs, and a
+  // generator that dies mid-ladder loses every cell after it as well. Clamping
+  // instead makes the cell drop iterations, which the runners already detect
+  // and mark .INVALID: a cell that fails honestly, rather than one that takes
+  // the rest of the run down with it.
+  const clamped = VU_BUDGET > 0 && wanted > VU_BUDGET;
+  const maxVUs = clamped ? Math.max(preAllocatedVUs, VU_BUDGET) : wanted;
+
+  const options = {
     // k6 reports avg/med/p(90)/p(95) by default; the SLA is stated at p99 and
     // tail behaviour is the point of the exercise.
     summaryTrendStats: ['min', 'avg', 'p(50)', 'p(95)', 'p(99)', 'p(99.9)', 'max'],
@@ -83,7 +119,7 @@ export function buildOptions(expectedLatencyMs) {
     // Thresholds read the measure phase only; warmup numbers are discarded.
     thresholds: {
       'http_req_failed{phase:measure}': [{ threshold: 'rate<0.01', abortOnFail: false }],
-      'http_req_duration{phase:measure}': [`p(99)<${SLA_MS}`],
+      'http_req_duration{phase:measure}': [`p(99)<${sla}`],
       // Scoped to the measured phase: a few drops while the VU pool is still
       // allocating during warmup are harmless, but a single drop during
       // measurement means the generator failed to offer the target rate and
@@ -95,6 +131,31 @@ export function buildOptions(expectedLatencyMs) {
       'http_reqs{phase:measure}': ['count>0'],
     },
   };
+
+  return {
+    options,
+    params: { timeout: `${timeout}ms` },
+    preAllocatedVUs,
+    maxVUs,
+    clampedFrom: clamped ? wanted : 0,
+  };
+}
+
+/**
+ * One line, once per run, saying what the generator committed to. Printed from
+ * a scenario's setup() so it lands in the runner's log beside the result: a
+ * cell sized against a clamp needs to say so on the record, not be inferred
+ * from a drop count afterwards.
+ */
+export function announce(plan) {
+  const gb = (n) => (n * 2 / 1024).toFixed(1);
+  console.log(`  VUs               ${plan.preAllocatedVUs} pre-allocated, ` +
+              `${plan.maxVUs} max (~${gb(plan.maxVUs)}GB at 2MB/VU)`);
+  if (plan.clampedFrom) {
+    console.log(`  VU BUDGET         maxVUs clamped from ${plan.clampedFrom}. ` +
+                `If this cell saturates it will drop iterations and be ` +
+                `marked INVALID rather than exhaust the generator.`);
+  }
 }
 
 /** Writes the raw summary next to the run's other artefacts. */

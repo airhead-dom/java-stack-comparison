@@ -85,9 +85,24 @@ curl http://localhost:8080/actuator/health
 Optional overrides, set before `java`:
 
 ```bash
-POOL_SIZE=50 java -jar ...             # connection pool size, default 20
-UPSTREAM_DELAY_MS=500 java -jar ...    # how slow the stub pretends to be
+POOL_SIZE=50 java -jar ...                  # connection pool size, default 20
+UPSTREAM_DELAY_MS=500 java -jar ...         # /api delay, default 200
+UPSTREAM_LONG_DELAY_MS=600 java -jar ...    # /api-800 delay, default 800
+UPSTREAM_LONGEST_DELAY_MS=1500 java -jar ...# /api-1000 delay, default 1000
+UPSTREAM_MAX_CONNECTIONS=4000 java -jar ... # webflux upstream pool, default 8000
 ```
+
+`/api-800` and `/api-1000` exist only on `mvc-virtual` and `webflux-r2dbc`. They
+are the same call as `/api` held four and five times longer, so what binds is
+requests in flight rather than thread count -- see `docs/WORKLOADS.md`. On
+`mvc-platform` and `mvc-jpa` they return 404, and the runners check for that
+rather than recording it as data.
+
+`UPSTREAM_MAX_CONNECTIONS` is reactive-only; the blocking variants get an
+unbounded HTTP/1.1 pool from the JDK client. It is worth knowing the knob
+exists: at a one-second delay, in-flight requests each hold an upstream
+connection for the whole delay, so a cap below the offered rate throttles the
+application rather than measuring it.
 
 ## Step 5 — Run the load
 

@@ -17,16 +17,20 @@ import org.springframework.web.reactive.function.client.WebClient;
  * a reason that has nothing to do with being reactive. The pool is therefore
  * raised to a value that cannot bind, matching the unbounded HTTP/1.1 pool the
  * blocking variants get from the JDK client.
+ *
+ * The cap is configurable because "cannot bind" depends on the workload. The
+ * long-wait endpoints put one connection in flight per request for the whole
+ * delay: /api-1000 at 2,000 rps needs 2,000 at once, which the previous fixed
+ * 2,000 would have bound exactly at the top of the ladder.
  */
 @Configuration
 public class UpstreamConfig {
 
-	private static final int MAX_CONNECTIONS = 2000;
-
 	@Bean
-	public WebClient upstreamClient(@Value("${benchmark.upstream.base-url}") String baseUrl) {
+	public WebClient upstreamClient(@Value("${benchmark.upstream.base-url}") String baseUrl,
+			@Value("${benchmark.upstream.max-connections}") int maxConnections) {
 		ConnectionProvider provider = ConnectionProvider.builder("upstream")
-				.maxConnections(MAX_CONNECTIONS)
+				.maxConnections(maxConnections)
 				.pendingAcquireMaxCount(-1)
 				.build();
 		HttpClient httpClient = HttpClient.create(provider)

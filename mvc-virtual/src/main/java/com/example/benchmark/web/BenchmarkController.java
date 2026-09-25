@@ -37,13 +37,21 @@ public class BenchmarkController {
 
 	private final long upstreamDelayMs;
 
+	private final long upstreamLongDelayMs;
+
+	private final long upstreamLongestDelayMs;
+
 	public BenchmarkController(JdbcClient jdbcClient, RestClient upstreamClient,
 			@Value("${spring.application.name}") String variant,
-			@Value("${benchmark.upstream.delay-ms}") long upstreamDelayMs) {
+			@Value("${benchmark.upstream.delay-ms}") long upstreamDelayMs,
+			@Value("${benchmark.upstream.long-delay-ms}") long upstreamLongDelayMs,
+			@Value("${benchmark.upstream.longest-delay-ms}") long upstreamLongestDelayMs) {
 		this.jdbcClient = jdbcClient;
 		this.upstreamClient = upstreamClient;
 		this.variant = variant;
 		this.upstreamDelayMs = upstreamDelayMs;
+		this.upstreamLongDelayMs = upstreamLongDelayMs;
+		this.upstreamLongestDelayMs = upstreamLongestDelayMs;
 	}
 
 	/** No database, no upstream: measures web-layer overhead alone. */
@@ -87,9 +95,32 @@ public class BenchmarkController {
 	 */
 	@GetMapping("/api")
 	public UpstreamResponse api() {
+		return call(this.upstreamDelayMs);
+	}
+
+	/**
+	 * The same call held four times longer. At 1,000 rps that is ~800 requests
+	 * in flight rather than ~200, which is past any thread count either stack
+	 * has: what is scarce here is the memory and bookkeeping of a request in
+	 * flight, not a worker to run it on.
+	 */
+	@GetMapping("/api-800")
+	public UpstreamResponse api800() {
+		return call(this.upstreamLongDelayMs);
+	}
+
+	/** One second, so in-flight count and offered rate are the same number. */
+	@GetMapping("/api-1000")
+	public UpstreamResponse api1000() {
+		return call(this.upstreamLongestDelayMs);
+	}
+
+	// One request shape for all three delays, so the only thing that differs
+	// between the endpoints is how long the upstream takes to answer.
+	private UpstreamResponse call(long delayMs) {
 		return this.upstreamClient.get()
 				.uri(builder -> builder.path("/upstream")
-						.queryParam("delayMs", this.upstreamDelayMs)
+						.queryParam("delayMs", delayMs)
 						.build())
 				.retrieve()
 				.body(UpstreamResponse.class);

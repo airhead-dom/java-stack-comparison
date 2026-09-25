@@ -19,6 +19,15 @@ benchmark:
     # 200ms puts ~200 requests in flight at the 1,000 TPS target, which is
     # exactly Tomcat's default thread count. The rate ladder walks across it.
     delay-ms: ${UPSTREAM_DELAY_MS:200}
+    # The long-wait workloads. Nothing about a thread count binds at these
+    # delays; what grows is the number of requests simultaneously in flight --
+    # 800 and 1,000 respectively at the 1,000 TPS target -- so they measure what
+    # each stack spends to hold a waiting request rather than to run one.
+    long-delay-ms: ${UPSTREAM_LONG_DELAY_MS:800}
+    longest-delay-ms: ${UPSTREAM_LONGEST_DELAY_MS:1000}
+    # High enough that it cannot bind on any cell of any ladder. /api-1000 at
+    # 2,000 rps alone holds 2,000 connections open at once.
+    max-connections: ${UPSTREAM_MAX_CONNECTIONS:8000}
 
 server:
   port: 8080

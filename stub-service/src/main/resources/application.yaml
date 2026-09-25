@@ -9,4 +9,11 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        # prometheus, not just health. The long-wait workloads drive up to 2,000
+        # connections into this process at once, and the claim that the stub was
+        # never the bottleneck needs its own in-flight count, CPU and open file
+        # count as evidence rather than an assumption.
+        include: health,prometheus
+  metrics:
+    tags:
+      variant: stub-service
